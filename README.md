@@ -531,7 +531,7 @@ The sketch prints information such as:
 Once per second it also prints buffer statistics:
 
 ```text
-[STAT] ring=... adc_drop=... usb_starve=... usb=streaming rate=48000
+[STAT] ring=... adc_drop=... usb_starve=... usb=streaming rate=48000 apb_baud=9600
 ```
 
 ---
