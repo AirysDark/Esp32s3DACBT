@@ -30,7 +30,7 @@ jobs:
       - name: Compile for ESP32-S3-WROOM-1-N16R8
         run: |
           arduino-cli compile \
-            --fqbn "esp32:esp32:esp32s3:CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=default_16MB,PSRAM=opi" \
+            --fqbn "esp32:esp32:esp32s3:CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,DebugLevel=none" \
             --warnings all \
             --export-binaries \
             .
