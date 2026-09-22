@@ -84,12 +84,14 @@ The firmware is split into small modules so each subsystem can be debugged witho
 | `ProjectConfig.h` | GPIO assignments, ADC rates, PCM buffer size, USB rates and other project-wide constants |
 | `AudioBuffer.h` / `AudioBuffer.cpp` | Stereo PCM ring buffer plus ADC-drop and USB-starvation counters |
 | `AdcAudio.h` / `AdcAudio.cpp` | ESP32-S3 ADC DMA setup, APB8202 left/right sampling and conversion to signed PCM |
+| `APB8202Control.h` / `APB8202Control.cpp` | APB8202 UART driver, CRLF line parser, connection/call state engine and media-control helpers |
 | `UsbAudioHost.h` / `UsbAudioHost.cpp` | ESP-IDF 4.4 USB Host, UAC1 descriptor parsing, sample-rate setup, resampling and isochronous transfers to the NRG |
 
 Debugging map:
 
 ```text
 Bluetooth/analog problem -> AdcAudio.cpp
+APB UART/control/state    -> APB8202Control.cpp
 PCM buffering/overrun    -> AudioBuffer.cpp
 NRG USB/UAC problem      -> UsbAudioHost.cpp
 Pins/rates/buffer sizes  -> ProjectConfig.h
@@ -105,50 +107,58 @@ All `.cpp` and `.h` files stay in the same Arduino sketch folder as `Esp32s3DACB
 ```text
 Phone
   |
-  | Bluetooth A2DP
+  | Bluetooth A2DP / AVRCP / HFP
   v
-APB8202 V1.3
+APB8202 V1.3 (CW6638M)
+  |\
+  | \ L-OUT / R-OUT analog stereo
+  |  \____________________________> ESP32-S3 ADC -> PCM -> USB Host -> NRG
   |
-  | L-OUT / R-OUT analog stereo
-  v
-ESP32-S3 ADC DMA
-  |
-  | PCM
-  v
-ESP32-S3 native USB HOST
-  |
-  | USB Audio Class 1
-  v
-NRG USB Audio 7.1
-  |
-  v
-3.5 mm output
+  +---- TXD / RXD UART <-----------> ESP32-S3 Serial1
+          control + async state
 ```
 
 The original Bluetooth-speaker main PCB and power-amplifier section are **not used** in the final build. Only the loose APB8202 module is required.
 
 ---
 
-# APB8202 V1.3
+# APB8202 V1.3 / Buildwin CW6638M
 
-Known 14-pin core pinout:
+The APB8202 used here is a 3.3 V CMOS Bluetooth-audio module based on the Buildwin CW6638M/CW6637 family.
 
-| Pin | Name | Function |
+Project specification:
+
+```text
+Logic level:        3.3 V CMOS
+VIN:                3.0-3.6 V nominal 3.3 V
+UART format:        8 data bits, no parity, 1 stop bit
+UART default:       9600 or 115200 depending on factory ROM
+UART terminator:    CRLF (\r\n)
+Flow control:       CTS active-low
+Audio:              integrated 16-bit stereo DAC
+Profiles:           A2DP, AVRCP, HFP, HSP
+```
+
+The Bluetooth broadcast name is treated as **factory-ROM fixed** for this module; the ESP32 firmware does not attempt to rename it.
+
+## 14-pin core pinout
+
+| Pin | Label | Function |
 |---:|---|---|
-| 1 | XTAL_P | Crystal oscillator input |
-| 2 | XTAL_O | Crystal oscillator output |
-| 3 | VIN | Module power |
-| 4 | GND | System ground |
-| 5 | TXD | UART TX |
-| 6 | RXD | UART RX |
-| 7 | CTS | UART CTS |
-| 8 | TP6 | Factory test |
-| 9 | TP5 | Factory test |
-| 10 | TP4 | Factory test |
-| 11 | TP3 | Factory test |
-| 12 | TP2 | Factory test |
-| 13 | TP1 / TEST_EN | Factory test / test enable |
-| 14 | GND | Ground |
+| 1 | XTAL_P | Crystal oscillator connection |
+| 2 | XTAL_O | Crystal oscillator connection |
+| 3 | VIN | 3.3 V module power |
+| 4 | GND | Digital ground |
+| 5 | TXD | UART output -> ESP32 RX |
+| 6 | RXD | UART input <- ESP32 TX |
+| 7 | CTS | UART clear-to-send input |
+| 8 | TP6 | Factory test / GPIO |
+| 9 | TP5 | Factory test / GPIO |
+| 10 | TP4 | Factory test / GPIO |
+| 11 | TP3 | Factory test / GPIO |
+| 12 | TP2 | Factory test / GPIO |
+| 13 | TP1 | Boot/test input |
+| 14 | GND | Secondary ground |
 
 Audio pads:
 
@@ -158,10 +168,138 @@ R-OUT = right analog audio
 AGND  = analog audio ground
 ```
 
-For this build, TXD/RXD/CTS/test pins are not needed.
+## APB8202 UART wiring
+
+Default build: **no hardware flow control**.
+
+```text
+ESP32-S3                     APB8202
+------------------------------------------------
+3V3        ----------------> VIN  pin 3
+GND        ----------------> GND  pin 4/14
+GPIO18 RX  <---------------- TXD  pin 5
+GPIO17 TX  ----------------> RXD  pin 6
+GND        ----------------> CTS  pin 7
+```
+
+With hardware flow control disabled, APB8202 **CTS pin 7 is tied directly to GND**.
+
+Optional hardware-flow-control mode is supported in `ProjectConfig.h`:
+
+```cpp
+APB_USE_HARDWARE_FLOW_CONTROL = true;
+```
+
+Then wire:
+
+```text
+ESP32 GPIO16 RTS -----------> APB8202 CTS pin 7
+```
+
+Do not tie CTS to GND at the same time when RTS mode is enabled.
+
+## Verified APB8202 command set used by the driver
+
+Every command is sent with `\r\n`.
+
+| Command | Function |
+|---|---|
+| `AT` | UART ping / keep-alive |
+| `AT+RST` | Software reset |
+| `AT+LADDR?` | Query local Bluetooth MAC address |
+| `AT+BAUD?` | Query active baud index |
+| `AT+BAUD<n>` | Change baud index |
+| `AT+DISC` | Disconnect active link |
+| `AT+PLAY` | AVRCP play/pause toggle |
+| `AT+PAUSE` | AVRCP pause |
+| `AT+NEXT` | AVRCP next track |
+| `AT+PREV` | AVRCP previous track |
+| `AT+VOL+` | Volume step up |
+| `AT+VOL-` | Volume step down |
+| `AT+VOL=<0-30>` | Set volume index |
+| `AT+RESETPDL` | Clear paired-device history |
+
+Known baud-index examples:
+
+```text
+4 = 9600
+6 = 38400
+8 = 115200
+```
+
+## Non-blocking APB state engine
+
+`APB8202Control.cpp` parses UART one character at a time and assembles complete CRLF-terminated lines without blocking delays.
+
+State enum:
+
+```cpp
+enum ApbState {
+  IDLE,
+  DISCONNECTED,
+  CONNECTED,
+  CALL_INCOMING
+};
+```
+
+Recognized asynchronous notifications:
+
+```text
+CONNECTED
+DISCONNECT / DISCONNECTED
+CALL:<number>
+```
+
+`CALL:<number>` is parsed into a digits-only caller-number buffer exposed by `APB8202Control::callerNumber()`.
+
+Current state is exposed by `APB8202Control::state()` and `APB8202Control::stateName()`.
+
+The parser checks `DISCONNECT` before `CONNECTED`, because `DISCONNECTED` contains the substring `CONNECTED`.
+
+## Media-control helper API
+
+```cpp
+APB8202Control::playPause();
+APB8202Control::pause();
+APB8202Control::nextTrack();
+APB8202Control::previousTrack();
+APB8202Control::volumeUp();
+APB8202Control::volumeDown();
+APB8202Control::setVolume(0);   // valid 0..30
+APB8202Control::disconnect();
+APB8202Control::clearPairHistory();
+```
+
+`setVolume()` bounds values to the valid `0..30` range.
+
+## Serial Monitor APB console
+
+Use the board's **COM USB-C port** for flashing and Serial Monitor. The other USB-C is reserved for the ESP32-S3 native USB/OTG side used by the NRG.
+
+```text
+:probe        -> AT
+:addr         -> AT+LADDR?
+:baud?        -> AT+BAUD?
+:baudidx N    -> AT+BAUD<N>
+:play         -> AT+PLAY
+:pause        -> AT+PAUSE
+:next         -> AT+NEXT
+:prev         -> AT+PREV
+:vol+         -> AT+VOL+
+:vol-         -> AT+VOL-
+:vol N        -> AT+VOL=N, range 0..30
+:disc         -> AT+DISC
+:clearpairs   -> AT+RESETPDL
+:reset        -> AT+RST
+:uart 9600    -> change ESP32 Serial1 physical baud
+:uart 115200  -> change ESP32 Serial1 physical baud
+:state        -> show parsed APB state/caller
+:help         -> show commands
+```
+
+Any other line typed into Serial Monitor is forwarded directly to the APB8202 with CRLF.
 
 ---
-
 # ESP32-S3 audio input wiring
 
 The prototype uses:
@@ -179,7 +317,7 @@ APB8202 GND  -> ESP32 GND
 APB8202 AGND -> ESP32 GND
 ```
 
-Do not connect the APB UART/test pins for this version.
+UART control is wired separately on GPIO18/GPIO17 as documented above. TP1-TP6 remain unconnected.
 
 ---
 
@@ -519,6 +657,8 @@ If your board has only one USB connector, you may need an external USB-to-UART p
 The sketch prints information such as:
 
 ```text
+[APB] UART 9600 8N1 RX=GPIO18 TX=GPIO17 no HW flow control
+[APB TX] AT\\r\\n
 [ADC] running: GPIO4/GPIO5, 40000 Hz/channel
 [USB] host library installed
 [USB] client registered; waiting for NRG
@@ -531,12 +671,26 @@ The sketch prints information such as:
 Once per second it also prints buffer statistics:
 
 ```text
-[STAT] ring=... adc_drop=... usb_starve=... usb=streaming rate=48000 apb_baud=9600
+[STAT] ring=... adc_drop=... usb_starve=... usb=streaming rate=48000 apb=CONNECTED apb_baud=9600 caller=-
 ```
 
 ---
 
 # Troubleshooting
+
+## APB8202 UART is silent
+
+Check:
+
+- APB pin 5 TXD -> ESP32 GPIO18 RX
+- APB pin 6 RXD <- ESP32 GPIO17 TX
+- APB pin 7 CTS -> GND when hardware flow control is disabled
+- common ground
+- 3.3 V VIN
+- try `:uart 9600`, then `:probe`
+- if silent, try `:uart 115200`, then `:probe`
+
+The APB driver is non-blocking, so a missing UART response does not stop ADC capture or USB servicing.
 
 ## NRG does not power on
 
