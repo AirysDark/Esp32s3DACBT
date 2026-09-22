@@ -298,6 +298,153 @@ Media-control transmission is intentionally **not implemented yet**. The CW6638M
 
 Once the real framing/opcodes are identified, a separate protocol/control layer can be added without changing the analog audio or USB portions of the project.
 
+
+## Experimental: possible Bluetooth name change
+
+**Status: unverified research path.** The current project does not know a confirmed runtime command for changing the APB8202/CW6638M Bluetooth broadcast name. The working assumption is that the name may be stored in a boot-time configuration/parameter area rather than exposed through a simple ASCII `AT+NAME=` command.
+
+Possible reverse-engineering paths:
+
+1. inspect any external SPI flash/EEPROM on the APB8202 board for a stored device-name string or parameter block;
+2. investigate the factory test pads (`TP1`-`TP6`) for a vendor programming/configuration mode;
+3. continue UART/HCI sniffing to look for vendor-specific parameter traffic during boot or factory configuration.
+
+### Method 1: external SPI flash dump with a SOIC/SOP8 clip
+
+If the APB8202 board contains a separate 8-pin SPI flash chip, a SOIC/SOP8 test clip may allow the ESP32-S3 to read it without soldering directly to the flash pins.
+
+> Important: a test clip does **not** electrically isolate an in-circuit flash chip by itself. The APB8202 board should not be powered from its normal supply at the same time unless the flash and board power topology has been verified. Identify the exact memory part, its voltage, pinout and capacity before connecting or writing anything.
+
+Proposed ESP32-S3 SPI wiring for a standard 3.3 V 25-series flash:
+
+```text
+ESP32-S3                SOP8 flash
+----------------------------------------------
+GPIO10  --------------> Pin 1  CS
+GPIO13  <-------------- Pin 2  MISO / DO
+3V3     --------------> Pin 3  WP#  (high)
+GND     --------------> Pin 4  GND
+GPIO11  --------------> Pin 5  MOSI / DI
+GPIO12  --------------> Pin 6  CLK
+3V3     --------------> Pin 7  HOLD#/RESET# (high)
+3V3     --------------> Pin 8  VCC
+```
+
+Before any write attempt:
+
+- read the JEDEC ID (`0x9F`) and identify the actual flash part;
+- derive the real capacity from the part/JEDEC ID instead of assuming 1 MB;
+- make at least two complete dumps and verify that they are byte-for-byte identical;
+- keep an untouched backup;
+- search for the current Bluetooth name in ASCII and, if needed, UTF-16/other encodings;
+- do not assume that replacing a same-length string is sufficient: the parameter area may use checksums, CRCs, lengths, pointers, compression or encryption.
+
+Diagnostic ESP32-S3 raw SPI reader:
+
+```cpp
+#include <Arduino.h>
+#include <SPI.h>
+
+#define FLASH_CS   10
+#define FLASH_MISO 13
+#define FLASH_MOSI 11
+#define FLASH_CLK  12
+
+#define CMD_READ_ID   0x9F
+#define CMD_READ_DATA 0x03
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(FLASH_CS, OUTPUT);
+    digitalWrite(FLASH_CS, HIGH);
+
+    SPI.begin(FLASH_CLK, FLASH_MISO, FLASH_MOSI, FLASH_CS);
+    SPI.setDataMode(SPI_MODE0);
+    SPI.setBitOrder(MSBFIRST);
+    SPI.setFrequency(1000000); // Conservative diagnostic clock
+
+    delay(2000);
+
+    // Read JEDEC ID first.
+    digitalWrite(FLASH_CS, LOW);
+    SPI.transfer(CMD_READ_ID);
+    uint8_t mfg  = SPI.transfer(0x00);
+    uint8_t type = SPI.transfer(0x00);
+    uint8_t cap  = SPI.transfer(0x00);
+    digitalWrite(FLASH_CS, HIGH);
+
+    Serial.printf(
+        "[SPI] JEDEC ID -> MFG: 0x%02X, Type: 0x%02X, Cap: 0x%02X\n",
+        mfg, type, cap);
+
+    Serial.println("--- START OF RAW FLASH DUMP ---");
+
+    // Diagnostic example only: this reads the first 1 MiB.
+    // Change the range only after identifying the actual flash capacity.
+    for (uint32_t addr = 0; addr < 1048576; addr += 16) {
+        uint8_t chunk[16];
+
+        digitalWrite(FLASH_CS, LOW);
+        SPI.transfer(CMD_READ_DATA);
+        SPI.transfer((addr >> 16) & 0xFF);
+        SPI.transfer((addr >> 8) & 0xFF);
+        SPI.transfer(addr & 0xFF);
+
+        for (int i = 0; i < 16; i++) {
+            chunk[i] = SPI.transfer(0x00);
+        }
+
+        digitalWrite(FLASH_CS, HIGH);
+
+        for (int i = 0; i < 16; i++) {
+            if (chunk[i] < 0x10) Serial.print("0");
+            Serial.print(chunk[i], HEX);
+            Serial.print(" ");
+        }
+        Serial.println();
+    }
+
+    Serial.println("--- END OF RAW FLASH DUMP ---");
+}
+
+void loop() {}
+```
+
+This code is intentionally **read-only**. A flash-writing routine should not be added until the exact memory device, writable regions and any configuration integrity/checksum scheme are known.
+
+### Method 2: factory test pads (`TP1`-`TP6`)
+
+The module exposes production/test pads on pins 8-13. These may provide a factory programming/configuration path, but the exact electrical protocol and boot entry sequence for this APB8202 firmware are not yet confirmed.
+
+Current pin labels:
+
+```text
+Pin 8   TP6
+Pin 9   TP5
+Pin 10  TP4
+Pin 11  TP3
+Pin 12  TP2
+Pin 13  TP1 / test-boot related input
+```
+
+Do **not** blindly pull TP1 or the other test pads to GND or 3.3 V. First determine their idle voltages and locate a reliable CW6638M/APB8202 programming procedure or capture the original factory-board behavior.
+
+Vendor utilities sometimes referenced for Buildwin/Appotech devices include tools such as MPTool/ConfigApp, but support for this exact APB8202 firmware and a specific Bluetooth-name parameter has not been confirmed.
+
+### Method 3: UART/HCI parameter discovery
+
+The existing standalone serial bridge/sniffing sketch above remains useful for this path. If the factory firmware loads the Bluetooth name through UART/HCI/vendor-specific packets at boot, those packets may reveal the relevant opcode or parameter structure.
+
+For passive capture use only:
+
+```text
+APB8202 TXD pin 5 -> ESP32 GPIO18 RX
+APB8202 RXD pin 6 -> leave unconnected
+APB8202 CTS pin 7 -> leave unconnected
+```
+
+If the Bluetooth name is eventually located in external flash or a confirmed configuration packet, document the exact offset/opcode, surrounding bytes, checksum behavior and restore procedure before enabling automated modification.
+
 ---
 # ESP32-S3 audio input wiring
 
