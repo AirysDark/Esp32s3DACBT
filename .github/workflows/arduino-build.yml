@@ -1,0 +1,28 @@
+name: Arduino Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.10 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+      - name: Install EspUsbHost
+        run: arduino-cli lib install "EspUsbHost@2.9.0"
+
+      - name: Compile ESP32-S3 sketch
+        run: arduino-cli compile --fqbn esp32:esp32:esp32s3 .
