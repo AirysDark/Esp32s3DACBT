@@ -1,3 +1,4 @@
+# Core compatibility target: Arduino-ESP32 2.0.17
 name: Arduino Build
 
 on:
