@@ -1,3 +1,4 @@
+# Hardware target: ESP32-S3-WROOM-1-N16R8
 # Core compatibility target: Arduino-ESP32 2.0.17
 name: Arduino Build
 
@@ -22,9 +23,19 @@ jobs:
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core install esp32:esp32@2.0.17 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 
-      - name: Compile ESP32-S3 sketch
+      - name: Show ESP32-S3 board options
+        run: |
+          arduino-cli board details --fqbn esp32:esp32:esp32s3
+
+      - name: Compile for ESP32-S3-WROOM-1-N16R8
         run: |
           arduino-cli compile \
-            --fqbn esp32:esp32:esp32s3 \
+            --fqbn "esp32:esp32:esp32s3:CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=default_16MB,PSRAM=opi" \
             --warnings all \
+            --export-binaries \
             .
+
+      - name: Show firmware size
+        run: |
+          echo "Generated firmware files:"
+          find . -maxdepth 3 -type f \( -name "*.bin" -o -name "*.elf" \) -print -exec ls -lh {} \;
