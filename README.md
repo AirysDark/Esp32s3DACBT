@@ -443,6 +443,103 @@ APB8202 RXD pin 6 -> leave unconnected
 APB8202 CTS pin 7 -> leave unconnected
 ```
 
+### Method 4: experimental HCI `Write Local Name` injection
+
+If sniffing shows that the APB8202 firmware exposes a standard Bluetooth HCI UART/H4 controller interface, one possible **runtime** experiment is the Bluetooth Core `HCI_Write_Local_Name` command.
+
+The standard opcode is:
+
+```text
+HCI_Write_Local_Name = 0x0C13
+H4 command packet indicator = 0x01
+parameter length = 248 bytes = 0xF8
+
+packet prefix:
+01 13 0C F8
+```
+
+The remaining 248 parameter bytes contain the local name, NUL-padded to the fixed command length.
+
+Important limitations:
+
+- seeing bytes beginning with `04 0F` or `04 10` is **consistent with H4 HCI event traffic**, but by itself does not prove that this APB8202 firmware exposes a normal host-controllable HCI transport;
+- `HCI_Write_Local_Name` is a standard controller command, but there is no current proof that this module accepts it on pins 5/6;
+- even if accepted, the name may be **volatile** and revert after reset/power-cycle;
+- on Bluetooth 2.1+EDR firmware, discoverability data may also involve Extended Inquiry Response data, so changing the controller's local name does not guarantee every scan result immediately shows the new name;
+- the correct UART baud and any required flow-control behavior must be established first;
+- do not connect GPIO17 to APB RXD until passive sniffing has established that active transmission is appropriate.
+
+Example injector for a confirmed standard H4/HCI UART path:
+
+```cpp
+#include <Arduino.h>
+#include <string.h>
+
+#define APB_UART_NUM 1
+#define PIN_RX       18  // APB8202 TXD pin 5 -> ESP32 RX
+#define PIN_TX       17  // ESP32 TX -> APB8202 RXD pin 6
+#define TEST_BAUD    115200 // Replace with the baud proven by sniffing
+
+HardwareSerial APB_Bus(APB_UART_NUM);
+
+const char* newBluetoothName = "CUSTOM_HUAWEI_NODE";
+
+void injectNewBluetoothName() {
+    Serial.println("[HCI TEST] Sending HCI_Write_Local_Name...");
+
+    uint8_t hciPacket[252];
+    memset(hciPacket, 0, sizeof(hciPacket));
+
+    // H4 command packet + opcode 0x0C13 + 248-byte parameter block.
+    hciPacket[0] = 0x01;
+    hciPacket[1] = 0x13;
+    hciPacket[2] = 0x0C;
+    hciPacket[3] = 0xF8;
+
+    size_t nameLen = strlen(newBluetoothName);
+    if (nameLen > 247) nameLen = 247;
+    memcpy(&hciPacket[4], newBluetoothName, nameLen);
+
+    APB_Bus.write(hciPacket, sizeof(hciPacket));
+    APB_Bus.flush();
+
+    Serial.println("[HCI TEST] Packet transmitted; waiting for raw response.");
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(2000);
+
+    Serial.println("=== ESP32-S3 APB8202 HCI name-injection experiment ===");
+
+    APB_Bus.begin(TEST_BAUD, SERIAL_8N1, PIN_RX, PIN_TX);
+
+    // Fixed delay is only a first experiment. A better version should trigger
+    // from an observed/decoded controller-ready event rather than guessing time.
+    delay(500);
+    injectNewBluetoothName();
+}
+
+void loop() {
+    if (APB_Bus.available()) {
+        Serial.print("[APB RESPONSE] ");
+
+        while (APB_Bus.available()) {
+            uint8_t b = APB_Bus.read();
+            if (b < 0x10) Serial.print("0");
+            Serial.print(b, HEX);
+            Serial.print(" ");
+        }
+
+        Serial.println();
+    }
+}
+```
+
+For a standard HCI controller, the useful proof is not simply that bytes were transmitted. The response should be decoded as HCI events and matched to opcode `0x0C13` with a success status before treating the test as accepted.
+
+If that works, test whether the visible Bluetooth name actually changes and whether it survives a complete power cycle. Persistence would imply that the firmware mirrors the value into non-volatile configuration; reversion would indicate a runtime-only controller name.
+
 If the Bluetooth name is eventually located in external flash or a confirmed configuration packet, document the exact offset/opcode, surrounding bytes, checksum behavior and restore procedure before enabling automated modification.
 
 ---
