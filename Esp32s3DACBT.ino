@@ -8,7 +8,7 @@
     ProjectConfig.h      - hardware and timing constants
     AudioBuffer.*        - stereo PCM ring buffer + counters
     AdcAudio.*           - APB8202 analog capture using ADC DMA
-    APB8202Control.*     - APB8202 UART control/status/debug console
+    APB8202Control.*     - APB8202 UART state/control parser
     UsbAudioHost.*       - USB Audio Class 1 host for the NRG
 
   Signal paths:
@@ -31,7 +31,6 @@
 void setup()
 {
   Serial.begin(115200);
-  delay(1000);
 
   Serial.println();
   Serial.println("============================================");
@@ -43,7 +42,7 @@ void setup()
     Serial.println("[FATAL] APB8202 UART setup failed");
 
     while (true) {
-      delay(1000);
+      yield();
     }
   }
 
@@ -51,7 +50,7 @@ void setup()
     Serial.println("[FATAL] ADC setup failed");
 
     while (true) {
-      delay(1000);
+      yield();
     }
   }
 
@@ -59,7 +58,7 @@ void setup()
     Serial.println("[FATAL] USB host setup failed");
 
     while (true) {
-      delay(1000);
+      yield();
     }
   }
 }
@@ -74,7 +73,7 @@ void loop()
     lastReportMs = millis();
 
     Serial.printf(
-        "[STAT] ring=%lu/%lu adc_drop=%lu usb_starve=%lu usb=%s rate=%lu apb_baud=%lu\n",
+        "[STAT] ring=%lu/%lu adc_drop=%lu usb_starve=%lu usb=%s rate=%lu apb=%s apb_baud=%lu caller=%s\n",
         (unsigned long)AudioBuffer::available(),
         (unsigned long)(ProjectConfig::PCM_RING_FRAMES - 1),
         (unsigned long)AudioBuffer::droppedFrames(),
@@ -83,8 +82,12 @@ void loop()
             ? "streaming"
             : "idle",
         (unsigned long)UsbAudioHost::sampleRate(),
-        (unsigned long)APB8202Control::baudRate());
+        APB8202Control::stateName(),
+        (unsigned long)APB8202Control::baudRate(),
+        APB8202Control::callerNumber()[0] != '\0'
+            ? APB8202Control::callerNumber()
+            : "-");
   }
 
-  delay(2);
+  yield();
 }
