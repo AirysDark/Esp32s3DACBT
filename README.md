@@ -540,6 +540,164 @@ For a standard HCI controller, the useful proof is not simply that bytes were tr
 
 If that works, test whether the visible Bluetooth name actually changes and whether it survives a complete power cycle. Persistence would imply that the firmware mirrors the value into non-volatile configuration; reversion would indicate a runtime-only controller name.
 
+#### Method 4B: boot-triggered sniffer + HCI name injector
+
+This is the exact **sniff-then-inject** workflow intended for the Bluetooth-name experiment.
+
+**Status: experimental.** The code below assumes that passive sniffing has already shown a usable H4/HCI-style UART on APB8202 pins 5/6 and that the correct baud is known. It should not be treated as a confirmed flash-programming method.
+
+Process:
+
+1. ESP32-S3 boots and listens to APB8202 TXD on GPIO18.
+2. Power-cycle/reset the APB8202.
+3. ESP32-S3 watches the raw boot stream.
+4. When a candidate HCI event packet is detected, the ESP32-S3 sends `HCI_Write_Local_Name` (`0x0C13`) down APB8202 RXD through GPIO17.
+5. The response is captured in raw HEX so acceptance can be verified.
+6. After a successful command, scan for the new Bluetooth name and then power-cycle the APB8202 to determine whether the change is volatile or persistent.
+
+Target wiring:
+
+```text
+ESP32-S3                     APB8202
+------------------------------------------------
+3V3        ----------------> VIN  pin 3
+GND        ----------------> GND  pin 4/14
+GPIO18 RX  <---------------- TXD  pin 5
+GPIO17 TX  ----------------> RXD  pin 6
+
+LEAVE UNCONNECTED DURING THIS TEST:
+CTS pin 7
+TP1-TP6 / pins 8-13
+```
+
+Do not connect GPIO17 until the passive sniffing stage has established that active transmission is appropriate for the module.
+
+Experimental injector sketch:
+
+```cpp
+#include <Arduino.h>
+#include <string.h>
+
+#define APB_UART_NUM 1
+#define PIN_RX       18  // APB8202 Pin 5 TXD -> ESP32 RX
+#define PIN_TX       17  // ESP32 TX -> APB8202 Pin 6 RXD
+
+// Replace with the baud actually discovered during sniffing.
+#define MODULE_BAUD_RATE 115200
+
+HardwareSerial APB_Bus(APB_UART_NUM);
+
+// Keep the test name short for easy scan verification.
+const char* targetBluetoothName = "REPROGRAMMED_AUDIO";
+
+bool nameInjected = false;
+
+void injectNewDeviceIdentity() {
+    Serial.println();
+    Serial.println("[HCI TEST] Candidate HCI signature detected; sending Write Local Name...");
+
+    uint8_t packet[252];
+    memset(packet, 0, sizeof(packet));
+
+    // H4 command packet:
+    //   0x01       = HCI command packet indicator
+    //   0x0C13     = HCI_Write_Local_Name opcode, little-endian on wire
+    //   0xF8       = 248-byte parameter block
+    packet[0] = 0x01;
+    packet[1] = 0x13;
+    packet[2] = 0x0C;
+    packet[3] = 0xF8;
+
+    size_t nameLength = strlen(targetBluetoothName);
+
+    // HCI Write Local Name provides 248 parameter bytes.
+    // Leave room for NUL padding.
+    if (nameLength > 247) {
+        nameLength = 247;
+    }
+
+    memcpy(&packet[4], targetBluetoothName, nameLength);
+
+    APB_Bus.write(packet, sizeof(packet));
+    APB_Bus.flush();
+
+    nameInjected = true;
+    Serial.println("[HCI TEST] 252-byte Write Local Name frame transmitted.");
+}
+
+void printRawByte(uint8_t b) {
+    if (b < 0x10) Serial.print("0");
+    Serial.print(b, HEX);
+    Serial.print(" ");
+}
+
+void setup() {
+    Serial.begin(115200);
+    while (!Serial && millis() < 3000) {
+        yield();
+    }
+
+    Serial.println();
+    Serial.println("=======================================================");
+    Serial.println("ESP32-S3 APB8202 SNIFFER + HCI NAME INJECTOR");
+    Serial.println("=======================================================");
+
+    APB_Bus.begin(
+        MODULE_BAUD_RATE,
+        SERIAL_8N1,
+        PIN_RX,
+        PIN_TX);
+
+    Serial.printf(
+        "[STATUS] Listening at %lu baud. Reset/power-cycle APB8202 now.\n",
+        (unsigned long)MODULE_BAUD_RATE);
+}
+
+void loop() {
+    if (!APB_Bus.available()) {
+        return;
+    }
+
+    uint8_t firstByte = APB_Bus.peek();
+
+    // 0x04 is the H4 packet indicator for an HCI Event packet.
+    // It is only a candidate trigger; a production version should decode the
+    // complete HCI event packet before deciding that the controller is ready.
+    if (!nameInjected && firstByte == 0x04) {
+        Serial.println("[SNIFF] Candidate H4 HCI event detected.");
+
+        // Drain and print the currently buffered event bytes before injection.
+        Serial.print("[SNIFFED RAW HEX] ");
+
+        while (APB_Bus.available()) {
+            printRawByte((uint8_t)APB_Bus.read());
+        }
+
+        Serial.println();
+        injectNewDeviceIdentity();
+        return;
+    }
+
+    Serial.print("[APB RAW] ");
+
+    while (APB_Bus.available()) {
+        printRawByte((uint8_t)APB_Bus.read());
+    }
+
+    Serial.println();
+}
+```
+
+Important interpretation notes:
+
+- `0x04` means **H4 HCI Event packet indicator**, not specifically "controller ready". A robust injector should decode the event type and payload rather than triggering on every `0x04` byte.
+- `HCI_Write_Local_Name` changes the controller's local-name parameter if the command is supported. Calling this a **flash overwrite** is only justified if a later power-cycle proves the APB8202 firmware stores that value non-volatilely.
+- the Bluetooth specification allows a 248-byte Local Name parameter; the earlier 32-character clamp was only a conservative UI choice, not the HCI command limit.
+- success should be established by decoding the matching HCI Command Complete/Command Status response for opcode `0x0C13`, not merely by seeing bytes transmitted.
+- if the name changes but reverts after reset, this method is a runtime override only.
+- if no valid HCI acknowledgement is received, return to passive sniffing rather than repeatedly injecting packets.
+
+
 ### Method 5: ESP32-S3 self-advertised name takeover — BLE only
 
 This is a **separate workaround**, not a replacement for the APB8202 A2DP audio link.
