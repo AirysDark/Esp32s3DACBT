@@ -1,63 +1,66 @@
 # Esp32s3DACBT
 
-Bluetooth audio bridge using an **APB8202 V1.3 Bluetooth audio module**, an **ESP32-S3**, and an existing **NRG USB Audio 7.1** USB sound-card/DAC.
+Bluetooth audio bridge built around an **APB8202 V1.3 Bluetooth audio module**, an **ESP32-S3**, and the existing **NRG USB Audio 7.1** USB DAC/headphone adapter.
 
-The finished signal path is:
+## Required ESP32 core
+
+**This repository targets Arduino-ESP32 core 2.0.17.**
+
+The GitHub Actions build is pinned to:
 
 \`\`\`text
-Phone / Bluetooth source
-        |
-        | Bluetooth A2DP
-        v
-APB8202 V1.3 Bluetooth module
-        |
-        | analog stereo: L-OUT / R-OUT / AGND
-        v
-ESP32-S3 ADC
-        |
-        | stereo PCM
-        v
-ESP32-S3 native USB HOST
-        |
-        | USB Audio Class
-        v
-NRG USB Audio 7.1
-        |
-        v
-3.5 mm headphones / amplifier / speakers
+esp32 by Espressif Systems: 2.0.17
+Board: ESP32S3 Dev Module
 \`\`\`
 
-## Project status
+The firmware does **not** use the current EspUsbHost library, because current EspUsbHost 2.x requires Arduino-ESP32 3.2.0 or newer. Instead, the sketch uses the ESP-IDF 4.4 USB Host API that is already bundled inside Arduino-ESP32 2.0.17.
 
-The NRG USB Audio 7.1 has already been converted/tested as a USB-C audio device directly on a Samsung phone and works, including its control panel.
-
-This repository is the next stage: put an ESP32-S3 between the Bluetooth receiver and the NRG so the APB8202 receives Bluetooth audio and the ESP32-S3 sends that audio to the NRG as USB Audio Class host data.
-
-The firmware in this repository is the first Arduino-IDE prototype for that bridge. Hardware-specific USB-C/VBUS behavior still depends on the exact ESP32-S3 development board.
+The repository CI compiles the sketch against **2.0.17 on every push**.
 
 ---
 
-# Hardware
-
-## 1. Bluetooth module
-
-Exact module:
+## Signal path
 
 \`\`\`text
+Phone
+  |
+  | Bluetooth A2DP
+  v
 APB8202 V1.3
+  |
+  | L-OUT / R-OUT analog stereo
+  v
+ESP32-S3 ADC DMA
+  |
+  | PCM
+  v
+ESP32-S3 native USB HOST
+  |
+  | USB Audio Class 1
+  v
+NRG USB Audio 7.1
+  |
+  v
+3.5 mm output
 \`\`\`
 
-Known core pinout:
+The original Bluetooth-speaker main PCB and power-amplifier section are **not used** in the final build. Only the loose APB8202 module is required.
+
+---
+
+# APB8202 V1.3
+
+Known 14-pin core pinout:
 
 | Pin | Name | Function |
 |---:|---|---|
 | 1 | XTAL_P | Crystal oscillator input |
 | 2 | XTAL_O | Crystal oscillator output |
-| 3 | VIN | Module power input |
-| 4 | GND | Digital/system ground |
-| 5 | TXD | UART transmit |
-| 6 | RXD | UART receive |
-| 7 | CTS | UART clear-to-send |
+| 3 | VIN | Module power |
+| 4 | GND | System ground |
+| 5 | TXD | UART TX |
+| 6 | RXD | UART RX |
+| 7 | CTS | UART CTS |
 | 8 | TP6 | Factory test |
 | 9 | TP5 | Factory test |
 | 10 | TP4 | Factory test |
@@ -66,124 +69,53 @@ Known core pinout:
 | 13 | TP1 / TEST_EN | Factory test / test enable |
 | 14 | GND | Ground |
 
-The module also exposes analog audio pads:
+Audio pads:
 
-| Pad | Function |
-|---|---|
-| L-OUT | Left analog audio |
-| R-OUT | Right analog audio |
-| AGND | Audio ground |
+\`\`\`text
+L-OUT = left analog audio
+R-OUT = right analog audio
+AGND  = analog audio ground
+\`\`\`
 
-For this project, the UART/test pins are **not required**.
-
-The old Bluetooth-speaker main PCB and its amplifier section are **not part of the final build**. We are using the APB8202 module directly.
+For this build, TXD/RXD/CTS/test pins are not needed.
 
 ---
 
-## 2. NRG USB Audio 7.1
+# ESP32-S3 audio input wiring
 
-The NRG board already contains the USB audio controller, DAC and 3.5 mm output.
-
-Its USB pads were identified directly from the PCB silkscreen:
+The prototype uses:
 
 \`\`\`text
-TOP
-
-[ GND  ]   cable shield / chassis
-[ DGND ]   USB electrical ground
-[ +5V  ]   USB VBUS
-[ D-   ]   USB data minus
-[ D+   ]   USB data plus
-
-BOTTOM
+GPIO4 = left ADC input  = ADC1 channel 3
+GPIO5 = right ADC input = ADC1 channel 4
 \`\`\`
 
-The direct USB-C conversion has already been tested successfully with the Samsung phone.
-
-For a raw ESP32-S3 USB host connection:
+## APB power
 
 \`\`\`text
-ESP32-S3 GPIO19  -> USB D-
-ESP32-S3 GPIO20  -> USB D+
-USB 5V VBUS      -> NRG +5V
-USB GND          -> NRG DGND
-USB shield       -> NRG GND/shield when appropriate
+APB8202 VIN  -> ESP32 3.3V
+APB8202 GND  -> ESP32 GND
+APB8202 AGND -> ESP32 GND
 \`\`\`
 
-If the ESP32-S3 development board already has a **native USB-OTG USB-C connector**, use that connector rather than manually wiring GPIO19/GPIO20.
-
-### Important USB power note
-
-The ESP32-S3 chip supports USB host mode, but not every development board supplies **5 V VBUS outward** from its USB-C connector.
-
-The NRG requires USB VBUS power.
-
-If the NRG does not power up when connected to the ESP32-S3 host port, the board may need:
-
-- an OTG/VBUS enable jumper,
-- a board-specific VBUS power switch,
-- or an externally powered USB host connection.
-
-Do **not** feed 5 V into the ESP32-S3 3.3 V rail.
-
-A practical check is to measure between the NRG pads:
-
-\`\`\`text
-NRG +5V  -> approximately 5 V
-NRG DGND -> ground
-\`\`\`
-
-while the NRG is connected to the ESP32-S3 host port.
+Do not connect the APB UART/test pins for this version.
 
 ---
 
-# APB8202 -> ESP32-S3 audio wiring
+# Shared 1.65 V VBIAS
 
-The first prototype uses the ESP32-S3 internal ADC.
+The ESP32 ADC cannot measure the negative half of a normal AC audio waveform.
 
-Chosen pins:
+We therefore bias both ADC inputs around half of 3.3 V.
 
-\`\`\`text
-GPIO4 = LEFT ADC input
-GPIO5 = RIGHT ADC input
-\`\`\`
-
-Both are ADC1-capable pins on ESP32-S3 and avoid the native USB pins GPIO19/GPIO20.
-
-## Power wiring
-
-\`\`\`text
-APB8202 VIN   -> ESP32 3.3V
-APB8202 GND   -> ESP32 GND
-APB8202 AGND  -> ESP32 GND
-\`\`\`
-
-Unused for this build:
-
-\`\`\`text
-TXD   -> not connected
-RXD   -> not connected
-CTS   -> not connected
-TP1-TP6 -> not connected
-XTAL_P / XTAL_O -> not connected externally
-\`\`\`
-
----
-
-# 1.65 V VBIAS circuit
-
-The ESP32 ADC cannot measure a signal that swings below 0 V.
-
-Audio is AC, so both audio channels are shifted so that "zero audio" sits near **1.65 V**, halfway between 0 V and 3.3 V.
-
-VBIAS is **not another power supply**. It is simply the junction between two equal 10 kΩ resistors.
+VBIAS is simply the middle junction of two 10 kΩ resistors:
 
 \`\`\`text
 ESP32 3.3V
     |
    10k
     |
-    +------ VBIAS ~= 1.65V
+    +---------- VBIAS ~1.65V
     |
    10k
     |
@@ -200,10 +132,10 @@ For an electrolytic 10 uF capacitor:
 
 \`\`\`text
 positive leg -> VBIAS
-negative/striped leg -> GND
+negative / striped leg -> GND
 \`\`\`
 
-A voltage rating of **6.3 V or higher** is enough. 10 V, 16 V, 25 V, etc. are all fine.
+Use a capacitor rated **6.3 V or higher**. 10 V, 16 V and 25 V are all fine.
 
 Optional extra filtering:
 
@@ -211,7 +143,7 @@ Optional extra filtering:
 VBIAS ---- 100nF ---- GND
 \`\`\`
 
-The 100 nF capacitor is optional for the first prototype.
+The 100 nF capacitor is optional for first testing.
 
 Common capacitor codes:
 
@@ -223,247 +155,298 @@ Common capacitor codes:
 
 ---
 
-# Complete left/right ADC input circuit
+# Left and right audio circuits
 
-## Left channel
-
-\`\`\`text
-APB8202 L-OUT
-      |
-     1uF
-      |
-     10k
-      |
-      +---------------- GPIO4
-      |
-     10k
-      |
-    VBIAS
-\`\`\`
-
-## Right channel
+## Left
 
 \`\`\`text
-APB8202 R-OUT
-      |
-     1uF
-      |
-     10k
-      |
-      +---------------- GPIO5
-      |
-     10k
-      |
-    VBIAS
+APB L-OUT
+    |
+   1uF
+    |
+   10k
+    |
+    +---------------- GPIO4
+    |
+   10k
+    |
+  VBIAS
 \`\`\`
 
-Both channel-bias resistors connect back to the **same shared VBIAS point**:
+## Right
 
 \`\`\`text
-                    VBIAS
-                      |
-              +-------+-------+
-              |               |
-             10k             10k
-              |               |
-            GPIO4           GPIO5
+APB R-OUT
+    |
+   1uF
+    |
+   10k
+    |
+    +---------------- GPIO5
+    |
+   10k
+    |
+  VBIAS
 \`\`\`
 
-The complete shared bias network is therefore:
+Both 10 kΩ bias resistors connect to the **same VBIAS point**:
 
 \`\`\`text
-                         3.3V
-                           |
-                          10k
-                           |
-                           +------ VBIAS
-                           |          |
-                          10k       (+)10uF(-)
-                           |          |
-                          GND        GND
-
-VBIAS ---- 10k ---- GPIO4
-VBIAS ---- 10k ---- GPIO5
+                   VBIAS
+                     |
+             +-------+-------+
+             |               |
+            10k             10k
+             |               |
+           GPIO4           GPIO5
 \`\`\`
 
-The 1 uF capacitors block DC from the APB8202 audio outputs.
-
-Prefer a **1 uF ceramic or film capacitor** because it is non-polar.
-
-If an electrolytic capacitor is used for the 1 uF coupling capacitor, measure the DC voltage on both sides first and put the positive lead toward the side with the higher DC voltage. Do not assume its polarity without measuring.
+Prefer non-polar 1 uF ceramic/film capacitors for the two audio coupling capacitors.
 
 ---
 
-# Full point-to-point wiring summary
+# Complete analog wiring
 
 \`\`\`text
-APB8202                         ESP32-S3
-------------------------------------------------
-VIN        ------------------> 3.3V
-GND        ------------------> GND
-AGND       ------------------> GND
+                         ESP32 3.3V
+                              |
+                             10k
+                              |
+                              +------ VBIAS
+                              |          |
+                             10k       (+)10uF(-)
+                              |          |
+                             GND        GND
 
-L-OUT -> 1uF -> 10k ->+------> GPIO4
-                      |
-                     10k
-                      |
-                    VBIAS
+APB L-OUT ---- 1uF ---- 10k ----+---- GPIO4
+                                 |
+                                10k
+                                 |
+                               VBIAS
 
-R-OUT -> 1uF -> 10k ->+------> GPIO5
-                      |
-                     10k
-                      |
-                    VBIAS
+APB R-OUT ---- 1uF ---- 10k ----+---- GPIO5
+                                 |
+                                10k
+                                 |
+                               VBIAS
 
+APB VIN  ---------------------------- ESP32 3.3V
+APB GND  ---------------------------- ESP32 GND
+APB AGND ---------------------------- ESP32 GND
+\`\`\`
 
-VBIAS generator:
+Before connecting the APB audio signals, power the ESP32 and measure:
 
-3.3V ---- 10k ----+---- 10k ---- GND
-                  |
-                  +---- (+)10uF(-) ---- GND
-                  |
-                  +---- optional 100nF ---- GND
+\`\`\`text
+VBIAS -> GND ~= 1.65 V
 \`\`\`
 
 ---
 
-# USB host connection
+# NRG USB Audio 7.1
 
-The ESP32-S3 native USB peripheral uses:
+The NRG board was already tested directly on a Samsung USB-C phone and works, including its controls.
+
+Its labelled USB pads are:
+
+\`\`\`text
+TOP
+
+[ GND  ]  shield / chassis
+[ DGND ]  USB electrical ground
+[ +5V  ]  USB VBUS
+[ D-   ]  USB data minus
+[ D+   ]  USB data plus
+
+BOTTOM
+\`\`\`
+
+ESP32-S3 native USB pins:
 
 \`\`\`text
 GPIO19 = USB D-
 GPIO20 = USB D+
 \`\`\`
 
-If using the board's native OTG USB-C connector:
+If using a raw USB connection:
 
 \`\`\`text
-ESP32-S3 native USB-C
-        |
-        | USB-C cable / correct OTG-host connection
-        v
-NRG USB-C
+ESP32-S3 GPIO19 -> NRG D-
+ESP32-S3 GPIO20 -> NRG D+
+USB 5V VBUS     -> NRG +5V
+USB GND         -> NRG DGND
+shield          -> NRG GND where appropriate
 \`\`\`
 
-Do not use a USB-to-UART bridge connector as the NRG host port. The NRG must be connected to the connector wired to the ESP32-S3 **native USB OTG peripheral**.
+If your ESP32-S3 development board has a native USB-OTG USB-C connector, use that connector and a proper USB data/OTG connection.
 
-When using the native USB port as a host, USB CDC serial on that same native port cannot also own the USB peripheral. For debugging, use a separate UART/USB connector or external USB-to-UART adapter if your board provides one.
+## VBUS warning
+
+The ESP32-S3 chip supports USB host mode, but **the chip does not magically create 5 V VBUS**.
+
+Some development boards do not feed 5 V outward on the native USB connector when operating as host.
+
+The NRG needs approximately 5 V on VBUS.
+
+If the NRG does not power up, check:
+
+\`\`\`text
+NRG +5V to NRG DGND
+\`\`\`
+
+and verify approximately 5 V is present.
+
+Never connect 5 V to the ESP32-S3 **3V3** pin.
 
 ---
 
-# Arduino IDE requirements
+# Why core 2.0.17 changes the firmware
 
-This sketch targets:
+Arduino-ESP32 2.0.17 is based on the ESP-IDF 4.4 generation.
 
-- ESP32-S3
-- Arduino IDE
-- Arduino-ESP32 **3.2.0 or newer**
-- EspUsbHost **2.x**
+Two important consequences:
 
-For first bring-up, **Arduino-ESP32 3.3.10 is recommended**.
+1. The modern EspUsbHost 2.x library cannot be used because it requires Arduino-ESP32 3.2.0+.
+2. The older ADC DMA API has a lower documented aggregate sample-rate ceiling.
 
-As of September 2026 there is an open Arduino-ESP32 issue reporting an ESP32-S3 USB-host enumeration regression in core 3.3.11. Core 3.3.12 is also based on ESP-IDF 5.5.5, so 3.3.10 is the conservative starting point until the host regression is confirmed fixed.
-
-This project is separate from projects that intentionally require ESP32 core 2.0.17. **Do not use 2.0.17 for this sketch.**
-
-## Install board package
-
-Arduino IDE:
+Therefore this project uses:
 
 \`\`\`text
-Tools / Board / Boards Manager
-Search: esp32
-Install/select: esp32 by Espressif Systems
-Recommended first test version: 3.3.10
+adc_digi_initialize()
+adc_digi_controller_configure()
+adc_digi_read_bytes()
 \`\`\`
 
-## Install USB host library
-
-Arduino IDE:
+and:
 
 \`\`\`text
-Sketch -> Include Library -> Manage Libraries
-Search: EspUsbHost
-Install: EspUsbHost
+usb_host_install()
+usb_host_client_register()
+usb_host_interface_claim()
+usb_host_transfer_alloc()
+usb_host_transfer_submit()
 \`\`\`
 
-The current library line supports USB Audio host streaming on ESP32-S3.
+directly from the ESP-IDF APIs included with core 2.0.17.
 
 ---
 
-# Arduino IDE settings
+# ADC rate on core 2.0.17
 
-Typical starting point:
+The IDF 4.4 ADC digital driver documents a maximum aggregate rate of about 83.3 k conversions/s.
+
+We have two channels, so the code uses:
+
+\`\`\`text
+80,000 ADC conversions/second total
+= 40,000 samples/second LEFT
++ 40,000 samples/second RIGHT
+\`\`\`
+
+The USB side then performs simple sample-rate conversion from the 40 kHz captured PCM to whichever NRG stream is selected.
+
+The current USB output preference is:
+
+\`\`\`text
+48,000 Hz stereo 16-bit
+fallback:
+44,100 Hz stereo 16-bit
+\`\`\`
+
+---
+
+# USB Audio support in this first core-2.0.17 build
+
+The code implements a small USB Audio Class 1 host directly in the Arduino sketch.
+
+It searches the NRG USB configuration descriptor for:
+
+\`\`\`text
+USB Audio Class 1
+AudioStreaming interface
+stereo
+16-bit PCM
+48 kHz or 44.1 kHz
+isochronous OUT endpoint
+\`\`\`
+
+It then:
+
+1. claims the AudioStreaming alternate interface,
+2. attempts the UAC1 endpoint SET_CUR sample-rate request,
+3. allocates multiple isochronous USB OUT transfers,
+4. pulls stereo PCM from the ADC ring buffer,
+5. resamples 40 kHz input to the USB output rate,
+6. continuously feeds the NRG DAC.
+
+This is deliberately targeted at the NRG unit used for this project rather than trying to be a universal USB-audio library.
+
+---
+
+# Arduino IDE setup
+
+Install:
+
+\`\`\`text
+Arduino IDE
+Boards Manager
+esp32 by Espressif Systems
+Version: 2.0.17
+\`\`\`
+
+Select:
 
 \`\`\`text
 Board: ESP32S3 Dev Module
-USB CDC On Boot: Disabled
 \`\`\`
 
-If your board has separate UART and native-USB connectors, use the UART connector for upload/Serial Monitor and reserve the native USB connector for the NRG.
+No additional USB host library is required.
 
-Exact menu names vary by board package and board definition.
-
----
-
-# Firmware behavior
-
-The sketch:
-
-1. Samples APB8202 left/right analog audio using ESP32-S3 ADC1 DMA/continuous mode.
-2. Samples at a nominal 48 kHz per channel.
-3. Removes the approximately 1.65 V DC bias digitally.
-4. Converts the 12-bit ADC data to signed 16-bit PCM.
-5. Buffers stereo PCM in RAM.
-6. Starts the ESP32-S3 as a USB host using EspUsbHost.
-7. Detects the NRG as a USB Audio Class output device.
-8. Prefers 48 kHz / stereo / 16-bit output.
-9. Falls back to 44.1 kHz / stereo / 16-bit with simple sample-rate conversion.
-10. Streams the captured Bluetooth audio to the NRG.
-11. Prints USB/ADC buffer statistics to Serial.
-
-The code is in:
+In particular:
 
 \`\`\`text
-Esp32s3DACBT.ino
+DO NOT install/use EspUsbHost for this core-2.0.17 version.
 \`\`\`
 
----
-
-# Audio quality
-
-This first version deliberately uses the ESP32-S3 internal ADC so no extra ADC chip is required.
-
-Expected limitations:
-
-- more noise than a dedicated audio ADC,
-- limited ADC linearity,
-- possible ground noise,
-- some sample-clock drift,
-- simple 44.1 kHz fallback resampling,
-- quality depends heavily on wiring and grounding.
-
-A later higher-quality version can replace the internal ADC with a stereo I2S audio ADC while leaving the USB-host/NRG side largely unchanged.
+The USB Host code comes from the ESP-IDF libraries bundled inside the ESP32 board package.
 
 ---
 
-# First power-up procedure
+# Development / flashing
 
-1. Build the VBIAS network.
-2. With no APB audio connected, power the ESP32-S3.
-3. Measure **VBIAS -> GND**. It should be close to **1.65 V**.
-4. Power off.
-5. Connect APB8202 VIN/GND/AGND.
-6. Connect L-OUT through its 1 uF + 10 kΩ network to GPIO4.
-7. Connect R-OUT through its 1 uF + 10 kΩ network to GPIO5.
-8. Flash the Arduino sketch.
-9. Power the ESP32-S3.
-10. Pair a phone to the APB8202 and play audio.
-11. Connect the NRG to the ESP32-S3 native USB host port.
-12. Confirm the NRG receives approximately 5 V VBUS.
-13. Watch Serial output for the NRG USB descriptors and a supported 48 kHz or 44.1 kHz stereo stream.
-14. Plug headphones into the NRG 3.5 mm socket.
+The native USB peripheral is needed for the NRG host connection.
+
+During development, it is easiest to use a board with:
+
+\`\`\`text
+one USB/UART connector for programming + Serial Monitor
+and
+one native USB-OTG connector for the NRG
+\`\`\`
+
+If your board has only one USB connector, you may need an external USB-to-UART programmer while the native USB peripheral is being used as the NRG host.
+
+---
+
+# Serial output
+
+The sketch prints information such as:
+
+\`\`\`text
+[ADC] running: GPIO4/GPIO5, 40000 Hz/channel
+[USB] host library installed
+[USB] client registered; waiting for NRG
+[USB] device VID=....
+[USB] UAC1 OUT: iface=... alt=... ep=... mps=... rate=48000
+[USB] sample rate SET_CUR accepted
+[USB] audio streaming started
+\`\`\`
+
+Once per second it also prints buffer statistics:
+
+\`\`\`text
+[STAT] ring=... adc_drop=... usb_starve=... usb=streaming rate=48000
+\`\`\`
 
 ---
 
@@ -471,68 +454,57 @@ A later higher-quality version can replace the internal ADC with a stereo I2S au
 
 ## NRG does not power on
 
-The ESP32-S3 board may not source 5 V VBUS from its USB-C connector in host mode.
+The board is probably not sourcing 5 V VBUS.
 
-Check the board schematic/OTG jumper and measure NRG \`+5V\` to \`DGND\`.
+Measure NRG \`+5V\` to \`DGND\`.
 
-## NRG powers but never enumerates
+## NRG powers but there is no USB device message
 
 Check:
 
-- correct native USB connector,
-- USB host/OTG mode,
-- cable supports data,
-- VBUS is present,
-- Arduino-ESP32 version.
+- GPIO19 is D-
+- GPIO20 is D+
+- cable carries USB data
+- connector is the native USB-OTG port
+- common ground
+- 5 V VBUS
+- core is actually 2.0.17
 
-For first bring-up use Arduino-ESP32 3.3.10.
+## "no supported UAC1 stereo 16-bit 48k/44.1k output stream"
 
-## Serial says audio format unsupported
+The NRG is advertising a different USB Audio descriptor than expected.
 
-The sketch prints the USB audio streams advertised by the NRG.
+Capture the Serial output / descriptor information and the parser can be extended for the exact stream.
 
-Current firmware accepts:
+## Audio crackles / drops
+
+Watch:
 
 \`\`\`text
-48,000 Hz / 2 channel / 16 bit
-44,100 Hz / 2 channel / 16 bit
+adc_drop
+usb_starve
 \`\`\`
 
-If the NRG exposes a different format, update the stream-selection code.
+A rising \`adc_drop\` means the USB side is not consuming captured PCM quickly enough.
 
-## Audio is distorted
+A rising \`usb_starve\` means the USB side is consuming PCM faster than it is arriving or timing is unstable.
 
-Possible causes:
+The first version uses a simple rate converter and the ESP32-S3 internal ADC, so it is a functional prototype rather than the final hi-fi version.
 
-- L-OUT/R-OUT clipping the ADC input,
-- poor ground connection,
-- wrong coupling capacitor wiring,
-- excessive PCM gain,
-- ADC noise,
-- VBIAS not near 1.65 V.
+## Better final audio quality
 
-Reduce \`PCM_GAIN\` in the sketch if the ADC signal is clipping.
+A later revision can replace the internal ADC with a stereo I2S ADC.
 
-## Loud hum/noise
+The overall architecture remains:
 
-Keep:
-
-- APB audio wiring short,
-- AGND tied cleanly to ESP32 GND,
-- VBIAS capacitor close to the ESP32 ADC wiring,
-- USB/data wiring away from switching regulators where possible.
-
-## NRG buttons
-
-When the NRG was connected directly to the Samsung phone its controls worked.
-
-With the ESP32-S3 acting as the host, those controls no longer automatically reach the phone. Forwarding NRG HID consumer-control events back through the Bluetooth module would be a separate feature.
+\`\`\`text
+APB8202 -> digital capture -> ESP32-S3 -> USB host -> NRG
+\`\`\`
 
 ---
 
-# Reference links
+# Repository build check
 
-- Arduino-ESP32 USB Host documentation: https://docs.espressif.com/projects/arduino-esp32/en/latest/api/usb_host.html
-- Arduino-ESP32 ADC documentation: https://docs.espressif.com/projects/arduino-esp32/en/latest/api/adc.html
-- EspUsbHost library: https://github.com/tanakamasayuki/EspUsbHost
-- Arduino-ESP32 USB host regression report: https://github.com/espressif/arduino-esp32/issues/12783
+GitHub Actions is pinned to **Arduino-ESP32 2.0.17**.
+
+A green workflow means the checked-in sketch compiled using the exact core version required by this project.
