@@ -8,17 +8,22 @@
     ProjectConfig.h      - hardware and timing constants
     AudioBuffer.*        - stereo PCM ring buffer + counters
     AdcAudio.*           - APB8202 analog capture using ADC DMA
-    APB8202Control.*     - APB8202 UART state/control parser
+    APB8202Monitor.*     - passive RX-only raw UART monitor
     UsbAudioHost.*       - USB Audio Class 1 host for the NRG
 
   Signal paths:
     APB8202 L/R -> ESP32-S3 ADC -> PCM buffer -> USB Host -> NRG
-    APB8202 TX/RX <-> ESP32-S3 Serial1 for control/status
+    APB8202 TXD  -> ESP32-S3 GPIO18 RX for passive UART/HCI discovery
+
+  During discovery:
+    APB8202 RXD is NOT connected.
+    APB8202 CTS is NOT connected.
+    No commands are transmitted to the APB8202.
 */
 
 #include <Arduino.h>
 
-#include "APB8202Control.h"
+#include "APB8202Monitor.h"
 #include "AdcAudio.h"
 #include "AudioBuffer.h"
 #include "ProjectConfig.h"
@@ -35,11 +40,11 @@ void setup()
   Serial.println();
   Serial.println("============================================");
   Serial.println(" Esp32s3DACBT - Arduino-ESP32 core 2.0.17");
-  Serial.println(" APB8202 -> ADC/UART -> ESP32-S3 -> USB NRG");
+  Serial.println(" APB8202 -> ADC + passive UART -> USB NRG");
   Serial.println("============================================");
 
-  if (!APB8202Control::begin()) {
-    Serial.println("[FATAL] APB8202 UART setup failed");
+  if (!APB8202Monitor::begin()) {
+    Serial.println("[FATAL] APB8202 passive UART monitor setup failed");
 
     while (true) {
       yield();
@@ -65,7 +70,7 @@ void setup()
 
 void loop()
 {
-  APB8202Control::update();
+  APB8202Monitor::update();
 
   static uint32_t lastReportMs = 0;
 
@@ -73,7 +78,7 @@ void loop()
     lastReportMs = millis();
 
     Serial.printf(
-        "[STAT] ring=%lu/%lu adc_drop=%lu usb_starve=%lu usb=%s rate=%lu apb=%s apb_baud=%lu caller=%s\n",
+        "[STAT] ring=%lu/%lu adc_drop=%lu usb_starve=%lu usb=%s rate=%lu apb_baud=%lu apb_bytes=%lu apb_bursts=%lu\n",
         (unsigned long)AudioBuffer::available(),
         (unsigned long)(ProjectConfig::PCM_RING_FRAMES - 1),
         (unsigned long)AudioBuffer::droppedFrames(),
@@ -82,11 +87,9 @@ void loop()
             ? "streaming"
             : "idle",
         (unsigned long)UsbAudioHost::sampleRate(),
-        APB8202Control::stateName(),
-        (unsigned long)APB8202Control::baudRate(),
-        APB8202Control::callerNumber()[0] != '\0'
-            ? APB8202Control::callerNumber()
-            : "-");
+        (unsigned long)APB8202Monitor::baudRate(),
+        (unsigned long)APB8202Monitor::bytesSeen(),
+        (unsigned long)APB8202Monitor::burstsSeen());
   }
 
   yield();
