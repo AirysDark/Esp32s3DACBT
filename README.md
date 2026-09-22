@@ -17,6 +17,31 @@ The firmware does **not** use the current EspUsbHost library, because current Es
 
 The repository CI compiles the sketch against **2.0.17 on every push**.
 
+## Source layout
+
+The firmware is split into small modules so each subsystem can be debugged without working through one very large `.ino` file.
+
+| File | Purpose |
+|---|---|
+| `Esp32s3DACBT.ino` | Arduino `setup()` / `loop()` only; starts the subsystems and prints health statistics |
+| `ProjectConfig.h` | GPIO assignments, ADC rates, PCM buffer size, USB rates and other project-wide constants |
+| `AudioBuffer.h` / `AudioBuffer.cpp` | Stereo PCM ring buffer plus ADC-drop and USB-starvation counters |
+| `AdcAudio.h` / `AdcAudio.cpp` | ESP32-S3 ADC DMA setup, APB8202 left/right sampling and conversion to signed PCM |
+| `UsbAudioHost.h` / `UsbAudioHost.cpp` | ESP-IDF 4.4 USB Host, UAC1 descriptor parsing, sample-rate setup, resampling and isochronous transfers to the NRG |
+
+Debugging map:
+
+```text
+Bluetooth/analog problem -> AdcAudio.cpp
+PCM buffering/overrun    -> AudioBuffer.cpp
+NRG USB/UAC problem      -> UsbAudioHost.cpp
+Pins/rates/buffer sizes  -> ProjectConfig.h
+Startup/status reporting -> Esp32s3DACBT.ino
+```
+
+All `.cpp` and `.h` files stay in the same Arduino sketch folder as `Esp32s3DACBT.ino`, so Arduino IDE automatically compiles them with the sketch.
+
+
 ---
 
 ## Signal path
