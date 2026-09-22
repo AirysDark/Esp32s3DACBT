@@ -540,6 +540,62 @@ For a standard HCI controller, the useful proof is not simply that bytes were tr
 
 If that works, test whether the visible Bluetooth name actually changes and whether it survives a complete power cycle. Persistence would imply that the firmware mirrors the value into non-volatile configuration; reversion would indicate a runtime-only controller name.
 
+### Method 5: ESP32-S3 self-advertised name takeover — BLE only
+
+This is a **separate workaround**, not a replacement for the APB8202 A2DP audio link.
+
+The ESP32-S3 can advertise its own programmable **Bluetooth Low Energy (BLE)** device name and store that name in NVS, but it cannot become a Bluetooth Classic A2DP sink. Espressif documents the ESP32-S3 as **Bluetooth LE only**: Bluetooth Classic/BR-EDR is not supported, and ESP32-S3 also does not provide LE Audio. Therefore libraries such as `ESP32-A2DP` / `BluetoothA2DPSink` cannot turn this ESP32-S3 into the phone's normal Bluetooth-audio receiver.
+
+That means an "antenna trace cut + ESP32-S3 A2DP takeover" is **not viable on this hardware**. Cutting or disabling the APB8202 RF path would remove the only currently available Classic Bluetooth audio receiver from this project.
+
+What *is* possible on the existing ESP32-S3:
+
+- expose a separate BLE device with any runtime name you choose;
+- save that BLE name in ESP32 NVS using `Preferences.h`; 
+- use BLE for configuration/control/status;
+- keep the APB8202 handling the actual Classic Bluetooth A2DP audio;
+- continue trying to change the APB8202 name through the flash/HCI/factory methods above.
+
+If a future redesign truly needs the ESP chip itself to receive normal phone A2DP audio, use hardware with Bluetooth Classic support (for example the original ESP32 family) or a separate Classic-Bluetooth audio controller.
+
+#### Important correction to the proposed I2S pin example
+
+The proposed `GPIO22` and `GPIO23` pins are not ESP32-S3 GPIOs. ESP32-S3 numbering jumps from GPIO21 to GPIO26. If an I2S DAC is added later, use free GPIOs that actually exist and do not conflict with this project. For example, a candidate mapping could be:
+
+```text
+ESP32-S3                I2S DAC
+--------------------------------
+GPIO6   --------------> BCLK
+GPIO7   --------------> LRCK / WS
+GPIO8   --------------> DIN
+3V3     --------------> VCC   (only if the DAC board supports 3.3 V)
+GND     --------------> GND
+```
+
+This mapping is only a project pin-allocation example; I2S signals can be routed through the ESP32-S3 GPIO matrix, so the final pins should be selected after checking the exact carrier board and all other project connections.
+
+#### BLE runtime-name concept on ESP32-S3
+
+A BLE name can be made persistent with `Preferences.h`, but this changes only the ESP32-S3's BLE identity. It does **not** rename the APB8202 and does **not** make the ESP32-S3 an A2DP sink.
+
+Conceptual storage flow:
+
+```text
+Serial/UI requests new BLE name
+        |
+        v
+Preferences NVS stores string
+        |
+        v
+BLE stack restarts/updates advertising name
+        |
+        v
+ESP32-S3 appears under new BLE name
+
+APB8202 Classic Bluetooth audio name remains separate
+```
+
+
 If the Bluetooth name is eventually located in external flash or a confirmed configuration packet, document the exact offset/opcode, surrounding bytes, checksum behavior and restore procedure before enabling automated modification.
 
 ---
