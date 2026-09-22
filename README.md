@@ -6,16 +6,78 @@ Bluetooth audio bridge built around an **APB8202 V1.3 Bluetooth audio module**, 
 
 **This repository targets Arduino-ESP32 core 2.0.17.**
 
+## ESP32-S3 module used
+
+The hardware used for this project is the **ESP32-S3-WROOM-1-N16R8** variant.
+
+The `N16R8` memory configuration means:
+
+| Memory | Installed |
+|---|---:|
+| Flash | **16 MB** |
+| External PSRAM / SPIRAM | **8 MB** |
+| Flash bus | **Quad SPI (QSPI)** |
+| PSRAM bus | **Octal SPI (OPI)** |
+| Internal SRAM | **512 KB** |
+| CPU | Dual-core Xtensa LX7, up to **240 MHz** |
+
+### Arduino IDE settings used
+
+Use these settings with **esp32 by Espressif Systems 2.0.17**:
+
+```text
+Board:             ESP32S3 Dev Module
+CPU Frequency:     240MHz
+Flash Mode:        QIO
+Flash Size:        16MB
+Partition Scheme:  Default 16MB with SPIFFS
+PSRAM:             OPI PSRAM
+```
+
+The matching Arduino CLI/FQBN options used by GitHub Actions are:
+
+```text
+esp32:esp32:esp32s3:
+  CPUFreq=240,
+  FlashMode=qio,
+  FlashSize=16M,
+  PartitionScheme=default_16MB,
+  PSRAM=opi
+```
+
+The workflow therefore compiles for the **actual N16R8 memory configuration**, rather than the generic ESP32-S3 defaults.
+
+### 16 MB flash layout
+
+The project uses the core 2.0.17 `default_16MB` partition table so the full 16 MB flash is addressed while retaining OTA support.
+
+```text
+NVS       : 20 KB
+OTA data  : 8 KB
+APP0      : 6.25 MB
+APP1      : 6.25 MB
+SPIFFS    : 3.375 MB
+Core dump : 64 KB
+```
+
+This is a good development layout for this project because it provides two large firmware slots for OTA/update testing and still leaves several megabytes for filesystem storage.
+
+The 8 MB OPI PSRAM is enabled by the board configuration. DMA-critical USB/ADC buffers should remain in internal DMA-capable RAM; large non-DMA audio/history buffers can be moved to PSRAM later if needed.
+
 The GitHub Actions build is pinned to:
 
-\`\`\`text
+```text
 esp32 by Espressif Systems: 2.0.17
 Board: ESP32S3 Dev Module
-\`\`\`
+Flash: 16MB QIO
+Partition: default_16MB
+PSRAM: 8MB OPI
+CPU: 240MHz
+```
 
 The firmware does **not** use the current EspUsbHost library, because current EspUsbHost 2.x requires Arduino-ESP32 3.2.0 or newer. Instead, the sketch uses the ESP-IDF 4.4 USB Host API that is already bundled inside Arduino-ESP32 2.0.17.
 
-The repository CI compiles the sketch against **2.0.17 on every push**.
+The repository CI compiles the sketch against **2.0.17 on every push** using the N16R8 board settings above.
 
 ## Source layout
 
@@ -41,12 +103,11 @@ Startup/status reporting -> Esp32s3DACBT.ino
 
 All `.cpp` and `.h` files stay in the same Arduino sketch folder as `Esp32s3DACBT.ino`, so Arduino IDE automatically compiles them with the sketch.
 
-
 ---
 
 ## Signal path
 
-\`\`\`text
+```text
 Phone
   |
   | Bluetooth A2DP
@@ -67,7 +128,7 @@ NRG USB Audio 7.1
   |
   v
 3.5 mm output
-\`\`\`
+```
 
 The original Bluetooth-speaker main PCB and power-amplifier section are **not used** in the final build. Only the loose APB8202 module is required.
 
@@ -96,11 +157,11 @@ Known 14-pin core pinout:
 
 Audio pads:
 
-\`\`\`text
+```text
 L-OUT = left analog audio
 R-OUT = right analog audio
 AGND  = analog audio ground
-\`\`\`
+```
 
 For this build, TXD/RXD/CTS/test pins are not needed.
 
@@ -110,18 +171,18 @@ For this build, TXD/RXD/CTS/test pins are not needed.
 
 The prototype uses:
 
-\`\`\`text
+```text
 GPIO4 = left ADC input  = ADC1 channel 3
 GPIO5 = right ADC input = ADC1 channel 4
-\`\`\`
+```
 
 ## APB power
 
-\`\`\`text
+```text
 APB8202 VIN  -> ESP32 3.3V
 APB8202 GND  -> ESP32 GND
 APB8202 AGND -> ESP32 GND
-\`\`\`
+```
 
 Do not connect the APB UART/test pins for this version.
 
@@ -135,7 +196,7 @@ We therefore bias both ADC inputs around half of 3.3 V.
 
 VBIAS is simply the middle junction of two 10 kΩ resistors:
 
-\`\`\`text
+```text
 ESP32 3.3V
     |
    10k
@@ -145,38 +206,38 @@ ESP32 3.3V
    10k
     |
 ESP32 GND
-\`\`\`
+```
 
 Add one 10 uF capacitor from VBIAS to ground:
 
-\`\`\`text
+```text
 VBIAS ---- (+) 10uF (-) ---- GND
-\`\`\`
+```
 
 For an electrolytic 10 uF capacitor:
 
-\`\`\`text
+```text
 positive leg -> VBIAS
 negative / striped leg -> GND
-\`\`\`
+```
 
 Use a capacitor rated **6.3 V or higher**. 10 V, 16 V and 25 V are all fine.
 
 Optional extra filtering:
 
-\`\`\`text
+```text
 VBIAS ---- 100nF ---- GND
-\`\`\`
+```
 
 The 100 nF capacitor is optional for first testing.
 
 Common capacitor codes:
 
-\`\`\`text
+```text
 104 = 100 nF = 0.1 uF
 105 = 1 uF
 106 = 10 uF
-\`\`\`
+```
 
 ---
 
@@ -184,7 +245,7 @@ Common capacitor codes:
 
 ## Left
 
-\`\`\`text
+```text
 APB L-OUT
     |
    1uF
@@ -196,11 +257,11 @@ APB L-OUT
    10k
     |
   VBIAS
-\`\`\`
+```
 
 ## Right
 
-\`\`\`text
+```text
 APB R-OUT
     |
    1uF
@@ -212,11 +273,11 @@ APB R-OUT
    10k
     |
   VBIAS
-\`\`\`
+```
 
 Both 10 kΩ bias resistors connect to the **same VBIAS point**:
 
-\`\`\`text
+```text
                    VBIAS
                      |
              +-------+-------+
@@ -224,7 +285,7 @@ Both 10 kΩ bias resistors connect to the **same VBIAS point**:
             10k             10k
              |               |
            GPIO4           GPIO5
-\`\`\`
+```
 
 Prefer non-polar 1 uF ceramic/film capacitors for the two audio coupling capacitors.
 
@@ -232,7 +293,7 @@ Prefer non-polar 1 uF ceramic/film capacitors for the two audio coupling capacit
 
 # Complete analog wiring
 
-\`\`\`text
+```text
                          ESP32 3.3V
                               |
                              10k
@@ -258,13 +319,13 @@ APB R-OUT ---- 1uF ---- 10k ----+---- GPIO5
 APB VIN  ---------------------------- ESP32 3.3V
 APB GND  ---------------------------- ESP32 GND
 APB AGND ---------------------------- ESP32 GND
-\`\`\`
+```
 
 Before connecting the APB audio signals, power the ESP32 and measure:
 
-\`\`\`text
+```text
 VBIAS -> GND ~= 1.65 V
-\`\`\`
+```
 
 ---
 
@@ -274,7 +335,7 @@ The NRG board was already tested directly on a Samsung USB-C phone and works, in
 
 Its labelled USB pads are:
 
-\`\`\`text
+```text
 TOP
 
 [ GND  ]  shield / chassis
@@ -284,24 +345,24 @@ TOP
 [ D+   ]  USB data plus
 
 BOTTOM
-\`\`\`
+```
 
 ESP32-S3 native USB pins:
 
-\`\`\`text
+```text
 GPIO19 = USB D-
 GPIO20 = USB D+
-\`\`\`
+```
 
 If using a raw USB connection:
 
-\`\`\`text
+```text
 ESP32-S3 GPIO19 -> NRG D-
 ESP32-S3 GPIO20 -> NRG D+
 USB 5V VBUS     -> NRG +5V
 USB GND         -> NRG DGND
 shield          -> NRG GND where appropriate
-\`\`\`
+```
 
 If your ESP32-S3 development board has a native USB-OTG USB-C connector, use that connector and a proper USB data/OTG connection.
 
@@ -315,9 +376,9 @@ The NRG needs approximately 5 V on VBUS.
 
 If the NRG does not power up, check:
 
-\`\`\`text
+```text
 NRG +5V to NRG DGND
-\`\`\`
+```
 
 and verify approximately 5 V is present.
 
@@ -336,21 +397,21 @@ Two important consequences:
 
 Therefore this project uses:
 
-\`\`\`text
+```text
 adc_digi_initialize()
 adc_digi_controller_configure()
 adc_digi_read_bytes()
-\`\`\`
+```
 
 and:
 
-\`\`\`text
+```text
 usb_host_install()
 usb_host_client_register()
 usb_host_interface_claim()
 usb_host_transfer_alloc()
 usb_host_transfer_submit()
-\`\`\`
+```
 
 directly from the ESP-IDF APIs included with core 2.0.17.
 
@@ -362,21 +423,21 @@ The IDF 4.4 ADC digital driver documents a maximum aggregate rate of about 83.3 
 
 We have two channels, so the code uses:
 
-\`\`\`text
+```text
 80,000 ADC conversions/second total
 = 40,000 samples/second LEFT
 + 40,000 samples/second RIGHT
-\`\`\`
+```
 
 The USB side then performs simple sample-rate conversion from the 40 kHz captured PCM to whichever NRG stream is selected.
 
 The current USB output preference is:
 
-\`\`\`text
+```text
 48,000 Hz stereo 16-bit
 fallback:
 44,100 Hz stereo 16-bit
-\`\`\`
+```
 
 ---
 
@@ -386,14 +447,14 @@ The code implements a small USB Audio Class 1 host directly in the Arduino sketc
 
 It searches the NRG USB configuration descriptor for:
 
-\`\`\`text
+```text
 USB Audio Class 1
 AudioStreaming interface
 stereo
 16-bit PCM
 48 kHz or 44.1 kHz
 isochronous OUT endpoint
-\`\`\`
+```
 
 It then:
 
@@ -412,26 +473,31 @@ This is deliberately targeted at the NRG unit used for this project rather than 
 
 Install:
 
-\`\`\`text
+```text
 Arduino IDE
 Boards Manager
 esp32 by Espressif Systems
 Version: 2.0.17
-\`\`\`
+```
 
-Select:
+Then set:
 
-\`\`\`text
-Board: ESP32S3 Dev Module
-\`\`\`
+```text
+Board:             ESP32S3 Dev Module
+CPU Frequency:     240MHz
+Flash Mode:        QIO
+Flash Size:        16MB
+Partition Scheme:  Default 16MB with SPIFFS
+PSRAM:             OPI PSRAM
+```
 
 No additional USB host library is required.
 
 In particular:
 
-\`\`\`text
+```text
 DO NOT install/use EspUsbHost for this core-2.0.17 version.
-\`\`\`
+```
 
 The USB Host code comes from the ESP-IDF libraries bundled inside the ESP32 board package.
 
@@ -443,11 +509,11 @@ The native USB peripheral is needed for the NRG host connection.
 
 During development, it is easiest to use a board with:
 
-\`\`\`text
+```text
 one USB/UART connector for programming + Serial Monitor
 and
 one native USB-OTG connector for the NRG
-\`\`\`
+```
 
 If your board has only one USB connector, you may need an external USB-to-UART programmer while the native USB peripheral is being used as the NRG host.
 
@@ -457,7 +523,7 @@ If your board has only one USB connector, you may need an external USB-to-UART p
 
 The sketch prints information such as:
 
-\`\`\`text
+```text
 [ADC] running: GPIO4/GPIO5, 40000 Hz/channel
 [USB] host library installed
 [USB] client registered; waiting for NRG
@@ -465,13 +531,13 @@ The sketch prints information such as:
 [USB] UAC1 OUT: iface=... alt=... ep=... mps=... rate=48000
 [USB] sample rate SET_CUR accepted
 [USB] audio streaming started
-\`\`\`
+```
 
 Once per second it also prints buffer statistics:
 
-\`\`\`text
+```text
 [STAT] ring=... adc_drop=... usb_starve=... usb=streaming rate=48000
-\`\`\`
+```
 
 ---
 
@@ -481,7 +547,7 @@ Once per second it also prints buffer statistics:
 
 The board is probably not sourcing 5 V VBUS.
 
-Measure NRG \`+5V\` to \`DGND\`.
+Measure NRG `+5V` to `DGND`.
 
 ## NRG powers but there is no USB device message
 
@@ -494,6 +560,9 @@ Check:
 - common ground
 - 5 V VBUS
 - core is actually 2.0.17
+- Flash Size is 16MB
+- Flash Mode is QIO
+- PSRAM is OPI PSRAM
 
 ## "no supported UAC1 stereo 16-bit 48k/44.1k output stream"
 
@@ -505,14 +574,14 @@ Capture the Serial output / descriptor information and the parser can be extende
 
 Watch:
 
-\`\`\`text
+```text
 adc_drop
 usb_starve
-\`\`\`
+```
 
-A rising \`adc_drop\` means the USB side is not consuming captured PCM quickly enough.
+A rising `adc_drop` means the USB side is not consuming captured PCM quickly enough.
 
-A rising \`usb_starve\` means the USB side is consuming PCM faster than it is arriving or timing is unstable.
+A rising `usb_starve` means the USB side is consuming PCM faster than it is arriving or timing is unstable.
 
 The first version uses a simple rate converter and the ESP32-S3 internal ADC, so it is a functional prototype rather than the final hi-fi version.
 
@@ -522,14 +591,22 @@ A later revision can replace the internal ADC with a stereo I2S ADC.
 
 The overall architecture remains:
 
-\`\`\`text
+```text
 APB8202 -> digital capture -> ESP32-S3 -> USB host -> NRG
-\`\`\`
+```
 
 ---
 
 # Repository build check
 
-GitHub Actions is pinned to **Arduino-ESP32 2.0.17**.
+GitHub Actions is pinned to **Arduino-ESP32 2.0.17** and compiles with the N16R8 memory settings:
 
-A green workflow means the checked-in sketch compiled using the exact core version required by this project.
+```text
+CPUFreq=240
+FlashMode=qio
+FlashSize=16M
+PartitionScheme=default_16MB
+PSRAM=opi
+```
+
+A green workflow means the checked-in sketch compiled using both the required core version and the actual ESP32-S3-WROOM-1-N16R8 flash/PSRAM configuration.
