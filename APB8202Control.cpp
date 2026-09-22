@@ -11,37 +11,50 @@ namespace {
 static uint32_t currentBaud =
     ProjectConfig::APB_UART_DEFAULT_BAUD;
 
-static char terminalLine[128];
+static APB8202Control::ApbState currentState =
+    APB8202Control::IDLE;
+
+// APB UART receive line parser.
+static char apbLine[160];
+static size_t apbLineLength = 0;
+static bool apbSawCR = false;
+
+// Serial Monitor local command parser.
+static char terminalLine[160];
 static size_t terminalLength = 0;
 
-static bool apbAtLineStart = true;
+// CALL:<number> storage. Digits only, NUL terminated.
+static char lastCallerNumber[40] = "";
 
 void printHelp()
 {
   Serial.println();
   Serial.println("[APB] Serial Monitor control:");
-  Serial.println("  Type any AT command and press Enter -> sent exactly + CRLF");
-  Serial.println("  :probe       -> AT");
-  Serial.println("  :name        -> AT+NAME?");
-  Serial.println("  :play        -> AT+PLAY");
-  Serial.println("  :next        -> AT+NEXT");
-  Serial.println("  :prev        -> AT+PREV");
-  Serial.println("  :vol+        -> AT+VOL+");
-  Serial.println("  :vol-        -> AT+VOL-");
-  Serial.println("  :disc        -> AT+DISC");
-  Serial.println("  :reset       -> AT+RST");
-  Serial.println("  :baud 9600   -> change APB UART baud");
-  Serial.println("  :baud 115200 -> change APB UART baud");
-  Serial.println("  :help        -> this help");
+  Serial.println("  Any raw AT command + Enter -> forwarded with CRLF");
+  Serial.println("  :probe        -> AT");
+  Serial.println("  :addr         -> AT+LADDR?");
+  Serial.println("  :baud?        -> AT+BAUD?");
+  Serial.println("  :baudidx N    -> AT+BAUD<N>  (example N=4,6,8)");
+  Serial.println("  :play         -> AT+PLAY");
+  Serial.println("  :pause        -> AT+PAUSE");
+  Serial.println("  :next         -> AT+NEXT");
+  Serial.println("  :prev         -> AT+PREV");
+  Serial.println("  :vol+         -> AT+VOL+");
+  Serial.println("  :vol-         -> AT+VOL-");
+  Serial.println("  :vol N        -> AT+VOL=N (0..30)");
+  Serial.println("  :disc         -> AT+DISC");
+  Serial.println("  :clearpairs   -> AT+RESETPDL");
+  Serial.println("  :reset        -> AT+RST");
+  Serial.println("  :uart 9600    -> ESP32 Serial1 physical baud");
+  Serial.println("  :uart 115200  -> ESP32 Serial1 physical baud");
+  Serial.println("  :state        -> show parsed state/caller");
+  Serial.println("  :help         -> this help");
   Serial.println();
-  Serial.println(
-      "[APB] AT command names above are candidate commands until verified on the real module.");
 }
 
 bool configureUart(uint32_t baud)
 {
   Serial1.end();
-  delay(20);
 
   Serial1.setRxBufferSize(1024);
 
@@ -68,56 +81,170 @@ bool configureUart(uint32_t baud)
     }
 
     Serial.printf(
-        "[APB] UART: %lu baud, RX=GPIO%u, TX=GPIO%u, RTS=GPIO%u -> APB CTS\n",
+        "[APB] UART %lu 8N1 RX=GPIO%u TX=GPIO%u RTS=GPIO%u -> APB CTS\n",
         (unsigned long)baud,
         ProjectConfig::APB_UART_RX_GPIO,
         ProjectConfig::APB_UART_TX_GPIO,
         ProjectConfig::APB_UART_RTS_GPIO);
   } else {
     Serial.printf(
-        "[APB] UART: %lu baud, RX=GPIO%u, TX=GPIO%u, no HW flow control\n",
+        "[APB] UART %lu 8N1 RX=GPIO%u TX=GPIO%u no HW flow control\n",
         (unsigned long)baud,
         ProjectConfig::APB_UART_RX_GPIO,
         ProjectConfig::APB_UART_TX_GPIO);
 
     Serial.println(
-        "[APB] Hardware: APB CTS pin 7 must be tied to GND.");
+        "[APB] APB8202 CTS pin 7 MUST be tied directly to GND.");
   }
 
   currentBaud = baud;
   return true;
 }
 
-void printApbByte(uint8_t value)
+void setState(APB8202Control::ApbState newState)
 {
-  if (apbAtLineStart) {
-    Serial.print("[APB RX] ");
-    apbAtLineStart = false;
-  }
-
-  if (value == '\r') {
-    Serial.write('\r');
+  if (currentState == newState) {
     return;
   }
 
-  if (value == '\n') {
-    Serial.write('\n');
-    apbAtLineStart = true;
+  currentState = newState;
+
+  Serial.printf(
+      "[APB STATE] %s\n",
+      APB8202Control::stateName());
+}
+
+void parseCallerNumber(const char *line)
+{
+  const char *call = strstr(line, "CALL:");
+
+  if (call == NULL) {
     return;
   }
 
-  if (value == '\t' || (value >= 32 && value <= 126)) {
-    Serial.write(value);
+  call += 5;
+
+  size_t out = 0;
+
+  while (*call != '\0' &&
+         out < sizeof(lastCallerNumber) - 1) {
+    if (*call >= '0' && *call <= '9') {
+      lastCallerNumber[out++] = *call;
+    }
+
+    ++call;
+  }
+
+  lastCallerNumber[out] = '\0';
+
+  Serial.printf(
+      "[APB CALL] number=%s\n",
+      lastCallerNumber[0] != '\0'
+          ? lastCallerNumber
+          : "(not supplied)");
+}
+
+void processApbLine(const char *line)
+{
+  if (line == NULL || line[0] == '\0') {
     return;
   }
 
-  // Keep binary/status bytes readable instead of dumping terminal garbage.
-  Serial.printf("<%02X>", value);
+  Serial.printf("[APB RX] %s\n", line);
+
+  // IMPORTANT: DISCONNECTED contains the substring CONNECTED.
+  // Test disconnect first so it cannot be misclassified.
+  if (strstr(line, "DISCONNECT") != NULL) {
+    setState(APB8202Control::DISCONNECTED);
+    return;
+  }
+
+  if (strstr(line, "CALL:") != NULL) {
+    parseCallerNumber(line);
+    setState(APB8202Control::CALL_INCOMING);
+    return;
+  }
+
+  if (strstr(line, "CONNECTED") != NULL) {
+    setState(APB8202Control::CONNECTED);
+    return;
+  }
+
+  // OK, ERROR, +LADDR:, +BAUD:, +VOL: and other command responses are
+  // intentionally logged above but do not alter the connection state.
+}
+
+void finishApbLine()
+{
+  if (apbLineLength == 0) {
+    return;
+  }
+
+  apbLine[apbLineLength] = '\0';
+  processApbLine(apbLine);
+  apbLineLength = 0;
+}
+
+void consumeApbByte(char c)
+{
+  // Protocol lines are CRLF terminated. Keep this non-blocking and
+  // character-by-character.
+  if (c == '\r') {
+    apbSawCR = true;
+    return;
+  }
+
+  if (c == '\n') {
+    if (apbSawCR || apbLineLength > 0) {
+      finishApbLine();
+    }
+
+    apbSawCR = false;
+    return;
+  }
+
+  // A CR that was not followed by LF is treated as a delimiter to avoid
+  // merging malformed/firmware-specific output into the next line.
+  if (apbSawCR) {
+    finishApbLine();
+    apbSawCR = false;
+  }
+
+  if (apbLineLength < sizeof(apbLine) - 1) {
+    apbLine[apbLineLength++] = c;
+  } else {
+    apbLineLength = 0;
+    apbSawCR = false;
+    Serial.println(
+        "[APB] RX line overflow; discarded");
+  }
+}
+
+void readApbUart()
+{
+  while (Serial1.available() > 0) {
+    const int value = Serial1.read();
+
+    if (value >= 0) {
+      consumeApbByte((char)value);
+    }
+  }
+}
+
+void printState()
+{
+  Serial.printf(
+      "[APB] state=%s uart=%lu caller=%s\n",
+      APB8202Control::stateName(),
+      (unsigned long)APB8202Control::baudRate(),
+      APB8202Control::callerNumber()[0] != '\0'
+          ? APB8202Control::callerNumber()
+          : "(none)");
 }
 
 void handleTerminalLine(char *line)
 {
-  if (line[0] == '\0') {
+  if (line == NULL || line[0] == '\0') {
     return;
   }
 
@@ -131,13 +258,35 @@ void handleTerminalLine(char *line)
     return;
   }
 
-  if (strcmp(line, ":name") == 0) {
-    APB8202Control::queryName();
+  if (strcmp(line, ":addr") == 0) {
+    APB8202Control::queryAddress();
+    return;
+  }
+
+  if (strcmp(line, ":baud?") == 0) {
+    APB8202Control::queryBaud();
+    return;
+  }
+
+  if (strncmp(line, ":baudidx ", 9) == 0) {
+    const long index = strtol(line + 9, NULL, 10);
+
+    if (index < 1 || index > 8) {
+      Serial.println("[APB] baud index must be 1..8");
+      return;
+    }
+
+    APB8202Control::setBaudIndex((uint8_t)index);
     return;
   }
 
   if (strcmp(line, ":play") == 0) {
     APB8202Control::playPause();
+    return;
+  }
+
+  if (strcmp(line, ":pause") == 0) {
+    APB8202Control::pause();
     return;
   }
 
@@ -161,8 +310,25 @@ void handleTerminalLine(char *line)
     return;
   }
 
+  if (strncmp(line, ":vol ", 5) == 0) {
+    const long volume = strtol(line + 5, NULL, 10);
+
+    if (volume < 0 || volume > 30) {
+      Serial.println("[APB] volume must be 0..30");
+      return;
+    }
+
+    APB8202Control::setVolume((uint8_t)volume);
+    return;
+  }
+
   if (strcmp(line, ":disc") == 0) {
     APB8202Control::disconnect();
+    return;
+  }
+
+  if (strcmp(line, ":clearpairs") == 0) {
+    APB8202Control::clearPairHistory();
     return;
   }
 
@@ -171,20 +337,25 @@ void handleTerminalLine(char *line)
     return;
   }
 
-  if (strncmp(line, ":baud ", 6) == 0) {
+  if (strncmp(line, ":uart ", 6) == 0) {
     const uint32_t baud =
         strtoul(line + 6, NULL, 10);
 
     if (baud == 0) {
-      Serial.println("[APB] Invalid baud rate");
+      Serial.println("[APB] invalid UART baud");
       return;
     }
 
-    APB8202Control::setBaud(baud);
+    APB8202Control::setUartBaud(baud);
     return;
   }
 
-  // Anything not beginning with a local ':' command is sent directly to APB.
+  if (strcmp(line, ":state") == 0) {
+    printState();
+    return;
+  }
+
+  // Anything else is a raw APB command.
   APB8202Control::sendCommand(line);
 }
 
@@ -199,6 +370,7 @@ void readSerialMonitor()
         handleTerminalLine(terminalLine);
         terminalLength = 0;
       }
+
       continue;
     }
 
@@ -206,18 +378,8 @@ void readSerialMonitor()
       terminalLine[terminalLength++] = c;
     } else {
       terminalLength = 0;
-      Serial.println("[APB] Terminal command too long; discarded");
-    }
-  }
-}
-
-void readApbUart()
-{
-  while (Serial1.available() > 0) {
-    const int value = Serial1.read();
-
-    if (value >= 0) {
-      printApbByte((uint8_t)value);
+      Serial.println(
+          "[APB] terminal command too long; discarded");
     }
   }
 }
@@ -229,16 +391,25 @@ namespace APB8202Control {
 bool begin()
 {
   Serial.println();
-  Serial.println("=== APB8202 / CW6638M UART control ===");
+  Serial.println("=== APB8202 / CW6638M control ===");
 
-  if (!configureUart(ProjectConfig::APB_UART_DEFAULT_BAUD)) {
+  currentState = IDLE;
+  lastCallerNumber[0] = '\0';
+  apbLineLength = 0;
+  apbSawCR = false;
+  terminalLength = 0;
+
+  if (!configureUart(
+          ProjectConfig::APB_UART_DEFAULT_BAUD)) {
     return false;
   }
 
   printHelp();
 
-  // Do not automatically send control commands at boot. The exact command
-  // dictionary still needs to be verified against this APB8202 firmware.
+  // Ping the module once. No blocking wait is used; any response is processed
+  // asynchronously by update().
+  sendAT();
+
   return true;
 }
 
@@ -260,14 +431,44 @@ void sendCommand(const char *command)
   Serial1.print("\r\n");
 }
 
-void setBaud(uint32_t baud)
+ApbState state()
+{
+  return currentState;
+}
+
+const char *stateName()
+{
+  switch (currentState) {
+    case IDLE:
+      return "IDLE";
+
+    case DISCONNECTED:
+      return "DISCONNECTED";
+
+    case CONNECTED:
+      return "CONNECTED";
+
+    case CALL_INCOMING:
+      return "CALL_INCOMING";
+
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char *callerNumber()
+{
+  return lastCallerNumber;
+}
+
+void setUartBaud(uint32_t baud)
 {
   if (baud == 0 || baud == currentBaud) {
     return;
   }
 
   Serial.printf(
-      "[APB] Changing UART from %lu to %lu baud\n",
+      "[APB] changing ESP32 UART from %lu to %lu baud\n",
       (unsigned long)currentBaud,
       (unsigned long)baud);
 
@@ -284,14 +485,36 @@ void sendAT()
   sendCommand("AT");
 }
 
-void queryName()
-{
-  sendCommand("AT+NAME?");
-}
-
 void resetModule()
 {
   sendCommand("AT+RST");
+}
+
+void queryAddress()
+{
+  sendCommand("AT+LADDR?");
+}
+
+void queryBaud()
+{
+  sendCommand("AT+BAUD?");
+}
+
+void setBaudIndex(uint8_t index)
+{
+  if (index < 1 || index > 8) {
+    Serial.println("[APB] baud index must be 1..8");
+    return;
+  }
+
+  char command[16];
+  snprintf(
+      command,
+      sizeof(command),
+      "AT+BAUD%u",
+      index);
+
+  sendCommand(command);
 }
 
 void disconnect()
@@ -302,6 +525,11 @@ void disconnect()
 void playPause()
 {
   sendCommand("AT+PLAY");
+}
+
+void pause()
+{
+  sendCommand("AT+PAUSE");
 }
 
 void nextTrack()
@@ -322,6 +550,27 @@ void volumeUp()
 void volumeDown()
 {
   sendCommand("AT+VOL-");
+}
+
+void setVolume(uint8_t volume)
+{
+  if (volume > 30) {
+    volume = 30;
+  }
+
+  char command[20];
+  snprintf(
+      command,
+      sizeof(command),
+      "AT+VOL=%u",
+      volume);
+
+  sendCommand(command);
+}
+
+void clearPairHistory()
+{
+  sendCommand("AT+RESETPDL");
 }
 
 } // namespace APB8202Control
