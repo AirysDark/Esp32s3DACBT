@@ -36,6 +36,8 @@
 #include "usb/usb_types_ch9.h"
 #include "usb/usb_types_stack.h"
 
+struct AudioStreamInfo;
+
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error "Esp32s3DACBT requires ESP32-S3"
 #endif
