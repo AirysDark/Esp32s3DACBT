@@ -30,8 +30,9 @@ Board:             ESP32S3 Dev Module
 CPU Frequency:     240MHz
 Flash Mode:        QIO
 Flash Size:        16MB
-Partition Scheme:  Default 16MB with SPIFFS
+Partition Scheme:  16M Flash (3MB APP / 9.9MB FATFS)
 PSRAM:             OPI PSRAM
+Debug Level:       None
 ```
 
 The matching Arduino CLI/FQBN options used by GitHub Actions are:
@@ -41,26 +42,20 @@ esp32:esp32:esp32s3:
   CPUFreq=240,
   FlashMode=qio,
   FlashSize=16M,
-  PartitionScheme=default_16MB,
-  PSRAM=opi
-```
+  PartitionScheme=app3M_fat9M_16MB,
+  PSRAM=opi,\n  DebugLevel=none\n```
 
 The workflow therefore compiles for the **actual N16R8 memory configuration**, rather than the generic ESP32-S3 defaults.
 
 ### 16 MB flash layout
 
-The project uses the core 2.0.17 `default_16MB` partition table so the full 16 MB flash is addressed while retaining OTA support.
+Core 2.0.17 does contain a `default_16MB.csv` file internally, but that partition is not exposed by the ESP32S3 Dev Module board menu in core 2.0.17. The project therefore uses the exposed `app3M_fat9M_16MB` option so the full 16 MB flash is addressed while retaining OTA support.
 
 ```text
-NVS       : 20 KB
-OTA data  : 8 KB
-APP0      : 6.25 MB
-APP1      : 6.25 MB
-SPIFFS    : 3.375 MB
-Core dump : 64 KB
+NVS       : 20 KB\nOTA data  : 8 KB\nAPP0      : 3 MB\nAPP1      : 3 MB\nFATFS     : 9.875 MB\nCore dump : 64 KB
 ```
 
-This is a good development layout for this project because it provides two large firmware slots for OTA/update testing and still leaves several megabytes for filesystem storage.
+This layout provides two 3 MB firmware slots for OTA/update testing and uses almost 10 MB of the remaining flash as FATFS storage, so the 16 MB module is not treated like the generic 4 MB default.
 
 The 8 MB OPI PSRAM is enabled by the board configuration. DMA-critical USB/ADC buffers should remain in internal DMA-capable RAM; large non-DMA audio/history buffers can be moved to PSRAM later if needed.
 
@@ -70,7 +65,7 @@ The GitHub Actions build is pinned to:
 esp32 by Espressif Systems: 2.0.17
 Board: ESP32S3 Dev Module
 Flash: 16MB QIO
-Partition: default_16MB
+Partition: app3M_fat9M_16MB
 PSRAM: 8MB OPI
 CPU: 240MHz
 ```
@@ -487,7 +482,7 @@ Board:             ESP32S3 Dev Module
 CPU Frequency:     240MHz
 Flash Mode:        QIO
 Flash Size:        16MB
-Partition Scheme:  Default 16MB with SPIFFS
+Partition Scheme:  16M Flash (3MB APP / 9.9MB FATFS)
 PSRAM:             OPI PSRAM
 ```
 
@@ -605,7 +600,7 @@ GitHub Actions is pinned to **Arduino-ESP32 2.0.17** and compiles with the N16R8
 CPUFreq=240
 FlashMode=qio
 FlashSize=16M
-PartitionScheme=default_16MB
+PartitionScheme=app3M_fat9M_16MB
 PSRAM=opi
 ```
 
