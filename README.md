@@ -211,6 +211,70 @@ Any arbitrary receive baud can also be selected manually.
 
 For a real boot-signature test, choose one baud, then power-cycle/reset the APB8202 and watch the raw output. Repeat at the next baud. Simply changing baud after boot will not recreate bytes that were only transmitted during startup.
 
+## Standalone serial bridge / sniffing sketch
+
+This standalone sketch can be flashed when you want a very simple UART bridge/scanner instead of the full project firmware. It prints every received APB8202 byte in hexadecimal and can also forward PC Serial Monitor bytes to the APB UART.
+
+**For strict passive sniffing, leave APB8202 RXD pin 6 physically disconnected from ESP32 GPIO17.** If GPIO17 is connected, the bottom half of this sketch makes it an active two-way serial bridge.
+
+Change `TEST_BAUD` and re-flash when testing another baud rate.
+
+```cpp
+#include <Arduino.h>
+
+#define APB_UART_NUM 1
+#define PIN_RX       18  // Connects to APB8202 TXD
+#define PIN_TX       17  // Connects to APB8202 RXD
+
+// HCI chips usually boot at 115200, but can scale up to high speeds like 921600.
+// If the data looks like random symbols, change this number and re-flash.
+#define TEST_BAUD 115200
+
+HardwareSerial APB_Bus(APB_UART_NUM);
+
+void setup() {
+    // Open primary USB pipeline to your PC Monitor
+    Serial.begin(115200);
+    while(!Serial && millis() < 3000);
+
+    Serial.println("\n=======================================================");
+    Serial.printf("[INIT] ESP32-S3 Bridge Active. Listening to APB8202 at %d bps\n", TEST_BAUD);
+    Serial.println("=======================================================");
+
+    // Initialize the secondary communication bus with 8-N-1 configuration
+    APB_Bus.begin(TEST_BAUD, SERIAL_8N1, PIN_RX, PIN_TX);
+}
+
+void loop() {
+    // Read from the Buildwin chip and forward it instantly to your PC screen
+    if (APB_Bus.available()) {
+        while (APB_Bus.available()) {
+            uint8_t b = APB_Bus.read();
+            // Prints the raw hex character representation to prevent text parsing corruption
+            if (b < 0x10) Serial.print("0");
+            Serial.print(b, HEX);
+            Serial.print(" ");
+        }
+        Serial.println(); // Line break after a packet block finishes streaming
+    }
+
+    // Read characters typed from your PC keyboard and forward them down to the chip
+    if (Serial.available()) {
+        while (Serial.available()) {
+            APB_Bus.write(Serial.read());
+        }
+    }
+}
+```
+
+Suggested first baud values to try:
+
+```text
+9600
+38400
+115200
+921600
+```
 ## Serial Monitor commands
 
 Use the board's **COM USB-C port** for flashing and Serial Monitor.
