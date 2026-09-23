@@ -20,7 +20,21 @@ static char terminalLine[192];
 static size_t terminalLength = 0;
 
 static const uint32_t kProbeBauds[] = {
-  9600, 38400, 57600, 115200, 230400, 460800, 921600
+  9600,
+  38400,
+  57600,
+  115200,
+  230400,
+  460800,
+  576000,
+  750000,
+  921600,
+  1000000,
+  1152000,
+  1250000,
+  1300000,
+  1350000,
+  1400000
 };
 static const size_t kProbeBaudCount =
     sizeof(kProbeBauds) / sizeof(kProbeBauds[0]);
@@ -167,7 +181,7 @@ void startAutoScan()
   Serial0.println();
   Serial0.println("============================================");
   Serial0.println(" APB AUTOMATIC HCI UART BAUD SCAN");
-  Serial0.println(" Tests: 9600 38400 57600 115200 230400 460800 921600");
+  Serial0.println(" Tests UART rates from 9600 through 1,400,000 baud");
   Serial0.println(" Sends H4 HCI Reset 01 03 0C 00 at each rate");
   Serial0.println("============================================");
   configureUart(kProbeBauds[autoBaudIndex]);
