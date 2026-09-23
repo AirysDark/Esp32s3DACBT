@@ -3,8 +3,6 @@
 #include <Arduino.h>
 #include <stdlib.h>
 #include <string.h>
-#include "driver/gpio.h"
-#include "esp_timer.h"
 #include "ProjectConfig.h"
 
 namespace {
@@ -65,24 +63,6 @@ static uint32_t autoListenDeadlineMs = 0;
 static uint32_t autoListenRxStart = 0;
 static const uint32_t kAutoListenDwellMs = 2000;
 
-// Raw GPIO timing analyser. ISR stores edge-to-edge intervals in microseconds.
-// This bypasses UART decoding completely.
-static const size_t kEdgeSampleCount = 4096;
-static volatile uint32_t edgeIntervals[kEdgeSampleCount]; // CPU cycles between edges
-static volatile size_t edgeCount = 0;
-static volatile uint32_t edgeLastCycles = 0;
-static volatile bool edgeCaptureActive = false;
-
-void IRAM_ATTR edgeISR()
-{
-  if (!edgeCaptureActive) return;
-  uint32_t now = ESP.getCycleCount();
-  uint32_t previous = edgeLastCycles;
-  edgeLastCycles = now;
-  if (previous && edgeCount < kEdgeSampleCount)
-    edgeIntervals[edgeCount++] = now - previous;
-}
-
 void printBurst();
 
 void consolePrintln(const char *s) { Serial0.println(s); }
@@ -125,7 +105,6 @@ void printHelp()
   Serial0.println("  :listen            RX-only: continuously listen to the chip");
   Serial0.println("  :listen <rate>     set baud then continuously listen RX-only");
   Serial0.println("  :autolisten        RX-only rolling scan of ALL baud rates");
-  Serial0.println("  :edges             PASSIVE 5-second GPIO18 activity count");
   Serial0.println("  :stop              stop listen/autolisten mode");
   Serial0.println("  :help");
   Serial0.println();
@@ -343,66 +322,6 @@ void updateAutoListen()
   autoListenDeadlineMs = millis() + kAutoListenDwellMs;
 }
 
-
-void passiveEdgeCount()
-{
-  // IMPORTANT: do not stop/restart Serial1 and do not change GPIO18 mode.
-  // The Bluetooth module remains electrically untouched. We only observe
-  // transitions already present on the RX pin.
-  autoState = AUTO_IDLE;
-  autoListenMode = false;
-  listenMode = false;
-  rawBurstLength = 0;
-
-  // Silently discard anything already decoded by the UART.
-  while (Serial1.available()) Serial1.read();
-
-  edgeCount = 0;
-  edgeLastCycles = 0;
-  edgeCaptureActive = true;
-  attachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO),
-                  edgeISR, CHANGE);
-
-  Serial0.println();
-  Serial0.println("========== PASSIVE GPIO18 ACTIVITY TEST ==========");
-  Serial0.println("BT Pin 5 -> GPIO18 is NOT reconfigured.");
-  Serial0.println("Serial1 stays running. Nothing is transmitted.");
-  Serial0.println("Counting signal transitions for 5 seconds...");
-  Serial0.println("Do NOT press Bluetooth controls during this sample.");
-
-  const uint32_t startMs = millis();
-  while (millis() - startMs < 5000) {
-    // Keep the UART RX FIFO drained silently so garbage cannot flood the
-    // console after the measurement. Reading RX does not transmit anything.
-    while (Serial1.available()) Serial1.read();
-    delay(1);
-  }
-
-  edgeCaptureActive = false;
-  detachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO));
-
-  // Discard any bytes accumulated at the end of the window.
-  while (Serial1.available()) Serial1.read();
-  rawBurstLength = 0;
-
-  const size_t intervals = edgeCount;
-  const uint32_t transitions = intervals ? (uint32_t)intervals + 1U : 0U;
-  const float edgesPerSecond = transitions / 5.0f;
-
-  Serial0.println();
-  Serial0.println("=============== ACTIVITY RESULT ===============");
-  Serial0.printf("Transitions: %lu in 5 seconds\n", (unsigned long)transitions);
-  Serial0.printf("Transitions/second: %.1f\n", edgesPerSecond);
-  Serial0.printf("GPIO18 level now: %s\n",
-                 digitalRead(ProjectConfig::APB_UART_RX_GPIO) ? "HIGH" : "LOW");
-  Serial0.println("===============================================");
-  Serial0.println("Run this THREE times:");
-  Serial0.println("  1) connected, music STOPPED");
-  Serial0.println("  2) connected, music PLAYING");
-  Serial0.println("  3) connected, music PAUSED");
-  Serial0.println("Send me all three ACTIVITY RESULT blocks.");
-}
-
 void handleLine(char *line)
 {
   if (!line || !*line) return;
@@ -417,8 +336,6 @@ void handleLine(char *line)
     else startListen(baud);
   } else if (!strcmp(line,":autolisten")) {
     startAutoListen();
-  } else if (!strcmp(line,":edges")) {
-    passiveEdgeCount();
   } else if (!strcmp(line,":stop")) {
     listenMode=false;
     autoListenMode=false;
