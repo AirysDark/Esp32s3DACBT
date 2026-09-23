@@ -10,12 +10,12 @@ static const uint8_t AUDIO_RIGHT_GPIO = 5;
 static const uint8_t USB_D_MINUS_GPIO = 19;
 static const uint8_t USB_D_PLUS_GPIO  = 20;
 
-// APB8202 / CW6638M UART discovery:
-//   module pin 5 TXD -> ESP32-S3 GPIO18 RX
-//   module pin 6 RXD <- ESP32-S3 GPIO17 TX
+// APB8202 / CW6638M receive-only discovery:
+//   module pin 5 signal -> ESP32-S3 GPIO18 RX
+//   module pin 6 -> disconnected (ESP32 UART TX disabled)
 //   module pin 7 CTS -> disconnected
-static const uint8_t APB_UART_RX_GPIO = 18;
-static const uint8_t APB_UART_TX_GPIO = 17;
+static const int8_t APB_UART_RX_GPIO = 18;
+static const int8_t APB_UART_TX_GPIO = -1;
 
 static const uint32_t APB_MONITOR_DEFAULT_BAUD = 9600;
 static const uint32_t APB_MONITOR_BURST_GAP_MS = 12;
