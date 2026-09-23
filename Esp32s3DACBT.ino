@@ -22,7 +22,6 @@
 
 void setup()
 {
-  Serial0.begin(115200);
   DebugConsole.begin("Esp32s3DACBT Serial");
   delay(1000);
 
@@ -30,7 +29,7 @@ void setup()
   DebugConsole.println("============================================");
   DebugConsole.println(" APB8202 / CW6638M UART DISCOVERY MODE");
   DebugConsole.println("============================================");
-  DebugConsole.println(" PC console: Serial0 @ 115200");
+  DebugConsole.println(" Debug console: BLE only");
   DebugConsole.println(" BT TX pin 5 -> GPIO18 RX");
   DebugConsole.println(" BT RX pin 6 -> GPIO17 TX");
   DebugConsole.println(" ADC audio: DISABLED");
