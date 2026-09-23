@@ -69,7 +69,6 @@ size_t BLEDebugConsole::write(uint8_t c) { return write(&c, 1); }
 
 size_t BLEDebugConsole::write(const uint8_t *buffer, size_t size)
 {
-  Serial0.write(buffer, size);
   if (!bleConnected || !txCharacteristic || !size) return size;
 
   size_t offset = 0;
@@ -113,4 +112,4 @@ int BLEDebugConsole::peek()
   return v;
 }
 
-void BLEDebugConsole::flush() { Serial0.flush(); }
+void BLEDebugConsole::flush() {}
