@@ -114,7 +114,7 @@ APB8202 V1.3 (CW6638M)
   | \ L-OUT / R-OUT analog stereo
   |  \____________________________> ESP32-S3 ADC -> PCM -> USB Host -> NRG
   |
-  +---- TXD pin 5 -----------------> ESP32-S3 GPIO18 RX
+  +---- TXD pad (physical pin TBD) -----------------> ESP32-S3 GPIO18 RX
           passive UART/HCI discovery only
 ```
 
@@ -252,7 +252,7 @@ For a real boot-signature test, choose one baud, then power-cycle/reset the APB8
 
 This standalone sketch can be flashed when you want a very simple UART bridge/scanner instead of the full project firmware. It prints every received APB8202 byte in hexadecimal and can also forward PC Serial Monitor bytes to the APB UART.
 
-**For strict passive sniffing, leave APB8202 RXD pin 6 physically disconnected from ESP32 GPIO17.** If GPIO17 is connected, the bottom half of this sketch makes it an active two-way serial bridge.
+**For strict passive sniffing, leave APB8202 RXD pad (physical pin TBD) physically disconnected from ESP32 GPIO17.** If GPIO17 is connected, the bottom half of this sketch makes it an active two-way serial bridge.
 
 Change `TEST_BAUD` and re-flash when testing another baud rate.
 
@@ -453,18 +453,17 @@ This code is intentionally **read-only**. A flash-writing routine should not be 
 
 The earlier TP1-TP6 numbered mapping is no longer trusted. Physical pin 8 is now meter-confirmed GND, and physical pin 14 is meter-confirmed NOT GND. Factory test pads may still exist on the module, but their physical pin numbers must be re-identified before use.
 
-Current pin labels:
+Current physical-pin status:
 
 ```text
-Pin 8   TP6
-Pin 9   TP5
-Pin 10  TP4
-Pin 11  TP3
-Pin 12  TP2
-Pin 13  TP1 / test-boot related input
-Pin 14  NOT GND — meter-confirmed
-Pin 15  DAC_OUT / mixed analog audio output
+Pin 4   GND       ✅ meter-confirmed
+Pin 8   GND       ✅ meter-confirmed
+Pin 14  NOT GND   ✅ meter-confirmed
+
+All other physical pin functions are currently UNKNOWN / UNVERIFIED.
 ```
+
+The old assignments `Pin 8 = TP6`, `Pin 14 = GND`, and `Pin 15 = DAC_OUT` must not be used until the board is traced again.
 
 Do **not** blindly pull TP1 or the other test pads to GND or 3.3 V. First determine their idle voltages and locate a reliable CW6638M/APB8202 programming procedure or capture the original factory-board behavior.
 
@@ -474,12 +473,13 @@ Vendor utilities sometimes referenced for Buildwin/Appotech devices include tool
 
 The existing standalone serial bridge/sniffing sketch above remains useful for this path. If the factory firmware loads the Bluetooth name through UART/HCI/vendor-specific packets at boot, those packets may reveal the relevant opcode or parameter structure.
 
-For passive capture use only:
+For passive capture, first identify the actual TXD pad on the module. Then use:
 
 ```text
-APB8202 TXD pin 5 -> ESP32 GPIO18 RX
-APB8202 RXD pin 6 -> leave unconnected
-APB8202 CTS pin 7 -> leave unconnected
+APB8202 TXD pad (physical pin TBD) -> ESP32 GPIO18 RX
+APB8202 RXD pad (physical pin TBD) -> leave unconnected
+APB8202 CTS pad (physical pin TBD) -> leave unconnected
+APB8202 GND -> physical pin 4 or physical pin 8
 ```
 
 ### Method 4: experimental HCI `Write Local Name` injection
@@ -515,8 +515,8 @@ Example injector for a confirmed standard H4/HCI UART path:
 #include <string.h>
 
 #define APB_UART_NUM 1
-#define PIN_RX       18  // APB8202 TXD pin 5 -> ESP32 RX
-#define PIN_TX       17  // ESP32 TX -> APB8202 RXD pin 6
+#define PIN_RX       18  // APB8202 TXD pad (physical pin TBD) -> ESP32 RX
+#define PIN_TX       17  // ESP32 TX -> APB8202 RXD pad (physical pin TBD)
 #define TEST_BAUD    115200 // Replace with the baud proven by sniffing
 
 HardwareSerial APB_Bus(APB_UART_NUM);
@@ -599,14 +599,14 @@ Target wiring:
 ```text
 ESP32-S3                     APB8202
 ------------------------------------------------
-3V3        ----------------> VIN  pin 3
+3V3        ----------------> VIN pad (physical pin TBD)
 GND        ----------------> GND  pin 4 or pin 8
 GPIO18 RX  <---------------- TXD  pin 5
 GPIO17 TX  ----------------> RXD  pin 6
 
 LEAVE UNCONNECTED DURING THIS TEST:
-CTS pin 7
-TP1-TP6 / pins 8-13
+CTS pad (physical pin TBD)
+factory test pads (physical pin numbers TBD)
 ```
 
 Do not connect GPIO17 until the passive sniffing stage has established that active transmission is appropriate for the module.
@@ -813,7 +813,7 @@ APB8202 confirmed GND (physical pin 4 or 8) -> ESP32 GND
 APB8202 AGND -> ESP32 GND
 ```
 
-For UART discovery, only APB TXD pin 5 connects to ESP32 GPIO18 RX. APB RXD pin 6, CTS pin 7, and TP1-TP6 remain unconnected.
+For UART discovery, do not connect GPIO18/GPIO17 to the APB until the actual TXD/RXD pads are re-identified on this 15-pad module. Physical pin 4 or pin 8 may be used as the confirmed APB ground reference.
 
 ---
 
@@ -1154,7 +1154,7 @@ The sketch prints information such as:
 
 ```text
 [APB MON] RX-only GPIO18 @ 9600 baud, 8N1
-[APB MON] Leave APB RXD pin 6 and CTS pin 7 unconnected.
+[APB MON] Leave APB RXD pad (physical pin TBD) and CTS pad (physical pin TBD) unconnected.
 [ADC] running: GPIO4/GPIO5, 40000 Hz/channel
 [USB] host library installed
 [USB] client registered; waiting for NRG
@@ -1174,11 +1174,10 @@ Once per second it also prints:
 
 Check:
 
-- APB TXD pin 5 -> ESP32 GPIO18 RX
-- common ground
+- first confirm the actual APB TXD pad; its physical pin number is still unknown
+- common ground using confirmed APB physical pin 4 or pin 8
 - APB powered from the project's 3.3 V rail
-- APB RXD pin 6 is still unconnected
-- APB CTS pin 7 is still unconnected
+- leave the unidentified RXD/CTS candidates unconnected during passive probing
 - select a baud with `:baud ...`
 - power-cycle/reset the APB8202 after selecting the baud if you are looking for boot-only traffic
 - inspect both HEX and ASCII output rather than assuming text
