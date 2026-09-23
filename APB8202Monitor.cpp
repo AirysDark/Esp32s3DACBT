@@ -6,7 +6,6 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "ProjectConfig.h"
-#include "BLEDebugConsole.h"
 
 namespace {
 
@@ -86,7 +85,7 @@ void IRAM_ATTR edgeISR()
 
 void printBurst();
 
-void consolePrintln(const char *s) { DebugConsole.println(s); }
+void consolePrintln(const char *s) { Serial0.println(s); }
 
 bool configureUart(uint32_t baud)
 {
@@ -100,37 +99,37 @@ bool configureUart(uint32_t baud)
                 ProjectConfig::APB_UART_TX_GPIO);
 
   currentBaud = baud;
-  DebugConsole.printf("[APB] UART GPIO18 RX / GPIO17 TX @ %lu 8N1\n",
+  Serial0.printf("[APB] UART GPIO18 RX / GPIO17 TX @ %lu 8N1\n",
                  (unsigned long)baud);
-  DebugConsole.println("[APB] No bytes are transmitted automatically.");
+  Serial0.println("[APB] No bytes are transmitted automatically.");
   return true;
 }
 
 void printHelp()
 {
-  DebugConsole.println();
-  DebugConsole.println("[APB] Two-way RAW UART discovery console");
-  DebugConsole.println("  Pin 5 TXD -> GPIO18 RX");
-  DebugConsole.println("  Pin 6 RXD <- GPIO17 TX");
-  DebugConsole.println("  Pin 7 CTS -> disconnected");
-  DebugConsole.println();
-  DebugConsole.println("Commands:");
-  DebugConsole.println("  :baud <rate>       change UART speed");
-  DebugConsole.println("  :nextbaud          cycle common speeds");
-  DebugConsole.println("  :stats             counters");
-  DebugConsole.println("  :clear             clear counters");
-  DebugConsole.println("  :hex 01 03 0C 00   transmit exact bytes");
-  DebugConsole.println("  :text abc          transmit exact text, no CR/LF");
-  DebugConsole.println("  :hcireset          send standard H4 HCI Reset: 01 03 0C 00");
-  DebugConsole.println("  :autoscan          automatically test every baud and print result");
-  DebugConsole.println("  :listen            RX-only: continuously listen to the chip");
-  DebugConsole.println("  :listen <rate>     set baud then continuously listen RX-only");
-  DebugConsole.println("  :autolisten        RX-only rolling scan of ALL baud rates");
-  DebugConsole.println("  :analyze           measure raw GPIO18 edge timing for 10 seconds");
-  DebugConsole.println("  :stop              stop listen/autolisten mode");
-  DebugConsole.println("  :help");
-  DebugConsole.println();
-  DebugConsole.println("Expected H4 event packet type is 04 if this UART exposes HCI.");
+  Serial0.println();
+  Serial0.println("[APB] Two-way RAW UART discovery console");
+  Serial0.println("  Pin 5 TXD -> GPIO18 RX");
+  Serial0.println("  Pin 6 RXD <- GPIO17 TX");
+  Serial0.println("  Pin 7 CTS -> disconnected");
+  Serial0.println();
+  Serial0.println("Commands:");
+  Serial0.println("  :baud <rate>       change UART speed");
+  Serial0.println("  :nextbaud          cycle common speeds");
+  Serial0.println("  :stats             counters");
+  Serial0.println("  :clear             clear counters");
+  Serial0.println("  :hex 01 03 0C 00   transmit exact bytes");
+  Serial0.println("  :text abc          transmit exact text, no CR/LF");
+  Serial0.println("  :hcireset          send standard H4 HCI Reset: 01 03 0C 00");
+  Serial0.println("  :autoscan          automatically test every baud and print result");
+  Serial0.println("  :listen            RX-only: continuously listen to the chip");
+  Serial0.println("  :listen <rate>     set baud then continuously listen RX-only");
+  Serial0.println("  :autolisten        RX-only rolling scan of ALL baud rates");
+  Serial0.println("  :analyze           measure raw GPIO18 edge timing for 10 seconds");
+  Serial0.println("  :stop              stop listen/autolisten mode");
+  Serial0.println("  :help");
+  Serial0.println();
+  Serial0.println("Expected H4 event packet type is 04 if this UART exposes HCI.");
 }
 
 void printBurst()
@@ -138,18 +137,18 @@ void printBurst()
   if (!rawBurstLength) return;
   ++totalBursts;
 
-  DebugConsole.printf("[APB RX] baud=%lu burst=%lu len=%u HEX:",
+  Serial0.printf("[APB RX] baud=%lu burst=%lu len=%u HEX:",
                  (unsigned long)currentBaud,
                  (unsigned long)totalBursts,
                  (unsigned)rawBurstLength);
-  for (size_t i=0;i<rawBurstLength;i++) DebugConsole.printf(" %02X", rawBurst[i]);
+  for (size_t i=0;i<rawBurstLength;i++) Serial0.printf(" %02X", rawBurst[i]);
 
-  DebugConsole.print("  ASCII: ");
+  Serial0.print("  ASCII: ");
   for (size_t i=0;i<rawBurstLength;i++) {
     uint8_t b=rawBurst[i];
-    DebugConsole.write((b>=32 && b<=126) ? b : '.');
+    Serial0.write((b>=32 && b<=126) ? b : '.');
   }
-  DebugConsole.println();
+  Serial0.println();
   rawBurstLength=0;
 }
 
@@ -176,9 +175,9 @@ void sendBytes(const uint8_t *data, size_t len)
   Serial1.flush();
   totalTxBytes += n;
 
-  DebugConsole.printf("[APB TX] %u bytes HEX:", (unsigned)n);
-  for (size_t i=0;i<n;i++) DebugConsole.printf(" %02X",data[i]);
-  DebugConsole.println();
+  Serial0.printf("[APB TX] %u bytes HEX:", (unsigned)n);
+  for (size_t i=0;i<n;i++) Serial0.printf(" %02X",data[i]);
+  Serial0.println();
 }
 
 void sendHex(const char *p)
@@ -193,7 +192,7 @@ void sendHex(const char *p)
     char *end=nullptr;
     unsigned long v=strtoul(p,&end,16);
     if (end==p || v>0xFF || n>=sizeof(data)) {
-      DebugConsole.println("[APB] Invalid :hex input; packet NOT sent.");
+      Serial0.println("[APB] Invalid :hex input; packet NOT sent.");
       return;
     }
     data[n++]=(uint8_t)v;
@@ -201,7 +200,7 @@ void sendHex(const char *p)
   }
 
   if (!n) {
-    DebugConsole.println("[APB] No hex bytes supplied.");
+    Serial0.println("[APB] No hex bytes supplied.");
     return;
   }
   sendBytes(data,n);
@@ -212,7 +211,7 @@ void startAutoScan()
   listenMode = false;
   autoListenMode = false;
   if (autoState != AUTO_IDLE && autoState != AUTO_DONE) {
-    DebugConsole.println("[AUTO] scan already running");
+    Serial0.println("[AUTO] scan already running");
     return;
   }
 
@@ -221,13 +220,13 @@ void startAutoScan()
   autoReplyBaud = 0;
   autoRxStart = totalBytes;
   autoTxStart = totalTxBytes;
-  DebugConsole.println();
-  DebugConsole.println("============================================");
-  DebugConsole.println(" APB AUTOMATIC HCI UART BAUD SCAN");
-  DebugConsole.println(" Tests UART rates from 9600 through 3,000,000 baud");
-  DebugConsole.println(" 3 Mbaud is the documented CW6638M HCI UART ceiling.");
-  DebugConsole.println(" Sends H4 HCI Reset 01 03 0C 00 at each rate");
-  DebugConsole.println("============================================");
+  Serial0.println();
+  Serial0.println("============================================");
+  Serial0.println(" APB AUTOMATIC HCI UART BAUD SCAN");
+  Serial0.println(" Tests UART rates from 9600 through 3,000,000 baud");
+  Serial0.println(" 3 Mbaud is the documented CW6638M HCI UART ceiling.");
+  Serial0.println(" Sends H4 HCI Reset 01 03 0C 00 at each rate");
+  Serial0.println("============================================");
   configureUart(kProbeBauds[autoBaudIndex]);
   autoDeadlineMs = millis() + 250;
   autoState = AUTO_SETTLE;
@@ -244,7 +243,7 @@ void updateAutoScan()
   if (autoState == AUTO_SETTLE) {
     const uint8_t reset[] = {0x01,0x03,0x0C,0x00};
     const uint32_t before = totalBytes;
-    DebugConsole.printf("[AUTO] Testing %lu baud...\n",
+    Serial0.printf("[AUTO] Testing %lu baud...\n",
                    (unsigned long)kProbeBauds[autoBaudIndex]);
     sendBytes(reset, sizeof(reset));
     autoRxStart = before;
@@ -259,30 +258,30 @@ void updateAutoScan()
     if (received > 0) {
       autoAnyReply = true;
       autoReplyBaud = kProbeBauds[autoBaudIndex];
-      DebugConsole.printf("[AUTO] >>> RX DETECTED at %lu baud: %lu byte(s) <<<\n",
+      Serial0.printf("[AUTO] >>> RX DETECTED at %lu baud: %lu byte(s) <<<\n",
                      (unsigned long)autoReplyBaud,
                      (unsigned long)received);
     } else {
-      DebugConsole.printf("[AUTO] no RX at %lu baud\n",
+      Serial0.printf("[AUTO] no RX at %lu baud\n",
                      (unsigned long)kProbeBauds[autoBaudIndex]);
     }
 
     ++autoBaudIndex;
     if (autoBaudIndex >= kProbeBaudCount) {
-      DebugConsole.println();
-      DebugConsole.println("=============== AUTO RESULT ===============");
+      Serial0.println();
+      Serial0.println("=============== AUTO RESULT ===============");
       if (autoAnyReply) {
-        DebugConsole.printf("RESULT: RX DATA DETECTED. Last responding baud: %lu\n",
+        Serial0.printf("RESULT: RX DATA DETECTED. Last responding baud: %lu\n",
                        (unsigned long)autoReplyBaud);
-        DebugConsole.println("Inspect the [APB RX] HEX output above.");
+        Serial0.println("Inspect the [APB RX] HEX output above.");
       } else {
-        DebugConsole.println("RESULT: NO RX DATA AT ANY TESTED BAUD.");
-        DebugConsole.println("TX worked, but no UART reply was detected.");
+        Serial0.println("RESULT: NO RX DATA AT ANY TESTED BAUD.");
+        Serial0.println("TX worked, but no UART reply was detected.");
       }
-      DebugConsole.printf("TOTAL SCAN TX=%lu bytes  CURRENT TOTAL RX=%lu bytes\n",
+      Serial0.printf("TOTAL SCAN TX=%lu bytes  CURRENT TOTAL RX=%lu bytes\n",
                      (unsigned long)(totalTxBytes-autoTxStart),
                      (unsigned long)totalBytes);
-      DebugConsole.println("===========================================");
+      Serial0.println("===========================================");
       autoState = AUTO_DONE;
       return;
     }
@@ -297,13 +296,13 @@ void startListen(uint32_t baud)
 {
   if (baud && baud != currentBaud) configureUart(baud);
   listenMode = true;
-  DebugConsole.println();
-  DebugConsole.println("=============== APB LISTEN MODE ===============");
-  DebugConsole.printf("RX ONLY on GPIO18 at %lu baud. NOTHING will be transmitted.\n",
+  Serial0.println();
+  Serial0.println("=============== APB LISTEN MODE ===============");
+  Serial0.printf("RX ONLY on GPIO18 at %lu baud. NOTHING will be transmitted.\n",
                  (unsigned long)currentBaud);
-  DebugConsole.println("Listening continuously; incoming bytes appear as [APB RX].");
-  DebugConsole.println("Use :baud <rate> to change speed or :stop to leave listen mode.");
-  DebugConsole.println("================================================");
+  Serial0.println("Listening continuously; incoming bytes appear as [APB RX].");
+  Serial0.println("Use :baud <rate> to change speed or :stop to leave listen mode.");
+  Serial0.println("================================================");
 }
 
 void startAutoListen()
@@ -316,13 +315,13 @@ void startAutoListen()
   configureUart(kProbeBauds[0]);
   autoListenDeadlineMs = millis() + kAutoListenDwellMs;
 
-  DebugConsole.println();
-  DebugConsole.println("============ APB ROLLING AUTO-LISTEN ============");
-  DebugConsole.println("RX ONLY. NOTHING is transmitted to the BT module.");
-  DebugConsole.println("Automatically cycling every configured baud rate.");
-  DebugConsole.println("2 seconds per baud; repeats forever until :stop.");
-  DebugConsole.println("Any received bytes are printed immediately as [APB RX].");
-  DebugConsole.println("==================================================");
+  Serial0.println();
+  Serial0.println("============ APB ROLLING AUTO-LISTEN ============");
+  Serial0.println("RX ONLY. NOTHING is transmitted to the BT module.");
+  Serial0.println("Automatically cycling every configured baud rate.");
+  Serial0.println("2 seconds per baud; repeats forever until :stop.");
+  Serial0.println("Any received bytes are printed immediately as [APB RX].");
+  Serial0.println("==================================================");
 }
 
 void updateAutoListen()
@@ -333,7 +332,7 @@ void updateAutoListen()
   captureUart();
   uint32_t received = totalBytes - autoListenRxStart;
   if (received) {
-    DebugConsole.printf("[AUTO-LISTEN] *** %lu RX byte(s) detected at %lu baud ***\n",
+    Serial0.printf("[AUTO-LISTEN] *** %lu RX byte(s) detected at %lu baud ***\n",
                    (unsigned long)received,
                    (unsigned long)kProbeBauds[autoListenBaudIndex]);
   }
@@ -362,11 +361,11 @@ void analyzeRawSignal()
   attachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO),
                   edgeISR, CHANGE);
 
-  DebugConsole.println();
-  DebugConsole.println("============= RAW GPIO18 SIGNAL ANALYSER =============");
-  DebugConsole.println("UART decoder OFF. Measuring Pin 5 -> GPIO18 directly.");
-  DebugConsole.println("Capture time: 10 seconds. Generate BT activity now.");
-  DebugConsole.println("Nothing is transmitted to the APB module.");
+  Serial0.println();
+  Serial0.println("============= RAW GPIO18 SIGNAL ANALYSER =============");
+  Serial0.println("UART decoder OFF. Measuring Pin 5 -> GPIO18 directly.");
+  Serial0.println("Capture time: 10 seconds. Generate BT activity now.");
+  Serial0.println("Nothing is transmitted to the APB module.");
 
   uint32_t start = millis();
   while (millis() - start < 10000 && edgeCount < kEdgeSampleCount) {
@@ -377,13 +376,13 @@ void analyzeRawSignal()
   detachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO));
 
   size_t n = edgeCount;
-  DebugConsole.println();
-  DebugConsole.println("================ RAW SIGNAL RESULT ================");
-  DebugConsole.printf("Edges/intervals captured: %u\n", (unsigned)n);
+  Serial0.println();
+  Serial0.println("================ RAW SIGNAL RESULT ================");
+  Serial0.printf("Edges/intervals captured: %u\n", (unsigned)n);
 
   if (n < 4) {
-    DebugConsole.println("RESULT: NOT ENOUGH EDGE ACTIVITY TO ANALYSE.");
-    DebugConsole.println("Pin 5 was mostly static during this capture.");
+    Serial0.println("RESULT: NOT ENOUGH EDGE ACTIVITY TO ANALYSE.");
+    Serial0.println("Pin 5 was mostly static during this capture.");
   } else {
     // Histogram intervals from 1..200 us. The smallest strongly recurring
     // interval is the best first estimate of one serial bit time.
@@ -411,14 +410,14 @@ void analyzeRawSignal()
       }
     }
 
-    DebugConsole.printf("Shortest interval: %lu us\n", (unsigned long)minUs);
-    DebugConsole.printf("Longest interval:  %lu us\n", (unsigned long)maxUs);
-    DebugConsole.printf("Most common 1-200us interval: %lu us (%u hits)\n",
+    Serial0.printf("Shortest interval: %lu us\n", (unsigned long)minUs);
+    Serial0.printf("Longest interval:  %lu us\n", (unsigned long)maxUs);
+    Serial0.printf("Most common 1-200us interval: %lu us (%u hits)\n",
                    (unsigned long)bestUs, (unsigned)bestHits);
 
     if (bestUs) {
       uint32_t estimated = 1000000UL / bestUs;
-      DebugConsole.printf("Raw timing estimate: ~%lu baud if that interval is one bit\n",
+      Serial0.printf("Raw timing estimate: ~%lu baud if that interval is one bit\n",
                      (unsigned long)estimated);
 
       uint32_t nearest = kProbeBauds[0];
@@ -428,12 +427,12 @@ void analyzeRawSignal()
         uint32_t e=(b > estimated) ? b-estimated : estimated-b;
         if (e < nearestError) { nearest=b; nearestError=e; }
       }
-      DebugConsole.printf("Nearest configured UART rate: %lu baud\n",
+      Serial0.printf("Nearest configured UART rate: %lu baud\n",
                      (unsigned long)nearest);
-      DebugConsole.println("NOTE: This is a timing estimate, not proof the signal is UART.");
+      Serial0.println("NOTE: This is a timing estimate, not proof the signal is UART.");
     }
   }
-  DebugConsole.println("===================================================");
+  Serial0.println("===================================================");
 
   configureUart(currentBaud);
 }
@@ -448,7 +447,7 @@ void handleLine(char *line)
     startListen(0);
   } else if (!strncmp(line,":listen ",8)) {
     uint32_t baud=strtoul(line+8,nullptr,10);
-    if (!baud) DebugConsole.println("[APB] invalid listen baud");
+    if (!baud) Serial0.println("[APB] invalid listen baud");
     else startListen(baud);
   } else if (!strcmp(line,":autolisten")) {
     startAutoListen();
@@ -457,20 +456,20 @@ void handleLine(char *line)
   } else if (!strcmp(line,":stop")) {
     listenMode=false;
     autoListenMode=false;
-    DebugConsole.println("[APB] listen/autolisten stopped");
+    Serial0.println("[APB] listen/autolisten stopped");
   } else if (!strcmp(line,":stats")) {
-    DebugConsole.printf("[APB] baud=%lu RX=%lu bursts=%lu TX=%lu\n",
+    Serial0.printf("[APB] baud=%lu RX=%lu bursts=%lu TX=%lu\n",
       (unsigned long)currentBaud,(unsigned long)totalBytes,
       (unsigned long)totalBursts,(unsigned long)totalTxBytes);
   } else if (!strcmp(line,":clear")) {
     APB8202Monitor::clearCounters();
     totalTxBytes=0;
-    DebugConsole.println("[APB] counters cleared");
+    Serial0.println("[APB] counters cleared");
   } else if (!strcmp(line,":nextbaud")) {
     APB8202Monitor::nextBaud();
   } else if (!strncmp(line,":baud ",6)) {
     uint32_t baud=strtoul(line+6,nullptr,10);
-    if (!APB8202Monitor::setBaud(baud)) DebugConsole.println("[APB] invalid baud");
+    if (!APB8202Monitor::setBaud(baud)) Serial0.println("[APB] invalid baud");
   } else if (!strncmp(line,":hex ",5)) {
     sendHex(line+5);
   } else if (!strncmp(line,":text ",6)) {
@@ -482,14 +481,14 @@ void handleLine(char *line)
   } else if (!strcmp(line,":autoscan")) {
     startAutoScan();
   } else {
-    DebugConsole.println("[APB] Unknown command. Use :help");
+    Serial0.println("[APB] Unknown command. Use :help");
   }
 }
 
 void readConsole()
 {
-  while (DebugConsole.available()) {
-    char c=(char)DebugConsole.read();
+  while (Serial0.available()) {
+    char c=(char)Serial0.read();
     if (c=='\r' || c=='\n') {
       if (terminalLength) {
         terminalLine[terminalLength]='\0';
@@ -500,7 +499,7 @@ void readConsole()
       terminalLine[terminalLength++]=c;
     } else {
       terminalLength=0;
-      DebugConsole.println("[APB] command too long; discarded");
+      Serial0.println("[APB] command too long; discarded");
     }
   }
 }
@@ -511,7 +510,7 @@ namespace APB8202Monitor {
 
 bool begin()
 {
-  DebugConsole.println("=== APB8202 / CW6638M RAW UART DISCOVERY ===");
+  Serial0.println("=== APB8202 / CW6638M RAW UART DISCOVERY ===");
   totalBytes=0; totalBursts=0; totalTxBytes=0;
   rawBurstLength=0; terminalLength=0; lastByteMs=millis();
   if (!configureUart(ProjectConfig::APB_MONITOR_DEFAULT_BAUD)) return false;
@@ -531,7 +530,7 @@ bool setBaud(uint32_t baud)
 {
   if (!baud) return false;
   if (baud==currentBaud) {
-    DebugConsole.printf("[APB] already at %lu baud\n",(unsigned long)baud);
+    Serial0.printf("[APB] already at %lu baud\n",(unsigned long)baud);
     return true;
   }
   return configureUart(baud);
