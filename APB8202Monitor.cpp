@@ -34,7 +34,16 @@ static const uint32_t kProbeBauds[] = {
   1250000,
   1300000,
   1350000,
-  1400000
+  1400000,
+  1500000,
+  1600000,
+  1750000,
+  1843200,
+  2000000,
+  2250000,
+  2500000,
+  2750000,
+  3000000
 };
 static const size_t kProbeBaudCount =
     sizeof(kProbeBauds) / sizeof(kProbeBauds[0]);
@@ -181,7 +190,8 @@ void startAutoScan()
   Serial0.println();
   Serial0.println("============================================");
   Serial0.println(" APB AUTOMATIC HCI UART BAUD SCAN");
-  Serial0.println(" Tests UART rates from 9600 through 1,400,000 baud");
+  Serial0.println(" Tests UART rates from 9600 through 3,000,000 baud");
+  Serial0.println(" 3 Mbaud is the documented CW6638M HCI UART ceiling.");
   Serial0.println(" Sends H4 HCI Reset 01 03 0C 00 at each rate");
   Serial0.println("============================================");
   configureUart(kProbeBauds[autoBaudIndex]);
