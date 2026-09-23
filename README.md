@@ -139,24 +139,42 @@ Protocol handling:   treat as unknown binary/HCI-style data during discovery
 
 The firmware does **not** currently assume an ASCII AT-command protocol, CRLF command framing, text connection notifications, or any Bluetooth-name command.
 
-## 14-pin module pinout
+## 15-pin module pinout
 
-| Pin | Label | Function |
-|---:|---|---|
-| 1 | XTAL_P | Crystal / alternate clock connection |
-| 2 | XTAL_O | Crystal / alternate clock connection |
-| 3 | VIN | Module power input, 2.2-5.5 V supported |
-| 4 | GND | Primary digital ground |
-| 5 | TXD | UART serial output |
-| 6 | RXD | UART serial input |
-| 7 | CTS | UART flow-control / multifunction pin |
-| 8 | TP6 | Factory test pad |
-| 9 | TP5 | Factory test pad |
-| 10 | TP4 | Factory test pad |
-| 11 | TP3 | Factory test pad |
-| 12 | TP2 | Factory test pad |
-| 13 | TP1 | Factory boot/test input |
-| 14 | GND | Secondary ground |
+The physical APB8202 V1.3 module used in this project has **15 edge pads**: 7 on the left-hand side and 8 on the right-hand side. This supersedes the earlier 14-pin table.
+
+| Pin | Physical label | Electrical class | Purpose / project connection |
+|---:|---|---|---|
+| 1 | XTAL_P | Analog clock | On-board 26 MHz crystal reference pin |
+| 2 | XTAL_O | Analog clock | On-board 26 MHz crystal reference pin |
+| 3 | VIN (VCC) | Power input | Module main supply, 2.2-5.5 V; project uses 3.3 V |
+| 4 | GND | System ground | Primary digital ground; connect to ESP32 GND |
+| 5 | TXD | Digital output | UART data out; connect to ESP32 GPIO18 RX for sniffing |
+| 6 | RXD | Digital input | UART data in; connect to ESP32 GPIO17 TX only for active protocol tests |
+| 7 | CTS | Digital input / multifunction | Hardware flow-control / multifunction input; leave floating during current discovery work |
+| 8 | TP6 | Digital I/O | Factory production test node; leave unconnected |
+| 9 | TP5 | Digital I/O | Factory production test node; leave unconnected |
+| 10 | TP4 | Digital I/O | Factory production test node; leave unconnected |
+| 11 | TP3 | Digital I/O | Factory production test node; leave unconnected |
+| 12 | TP2 | Digital I/O | Factory production test node; leave unconnected |
+| 13 | TP1 | Digital input | Boot/test-related factory node; leave unconnected |
+| 14 | GND | Power ground | Secondary ground reference |
+| 15 | DAC_OUT | Analog output | Mixed 16-bit audio output |
+
+Physical grouping:
+
+```text
+LEFT-HAND EDGE (7 pads)       RIGHT-HAND EDGE (8 pads)
+------------------------------------------------------
+1   XTAL_P                    8   TP6
+2   XTAL_O                    9   TP5
+3   VIN / VCC                 10  TP4
+4   GND                       11  TP3
+5   TXD                       12  TP2
+6   RXD                       13  TP1
+7   CTS                       14  GND
+                              15  DAC_OUT
+```
 
 Audio pads:
 
@@ -414,7 +432,7 @@ This code is intentionally **read-only**. A flash-writing routine should not be 
 
 ### Method 2: factory test pads (`TP1`-`TP6`)
 
-The module exposes production/test pads on pins 8-13. These may provide a factory programming/configuration path, but the exact electrical protocol and boot entry sequence for this APB8202 firmware are not yet confirmed.
+The 15-pin module exposes production/test pads on pins 8-13. Pin 14 is the secondary ground pad and pin 15 is `DAC_OUT`. The TP1-TP6 pads may provide a factory programming/configuration path, but the exact electrical protocol and boot entry sequence for this APB8202 firmware are not yet confirmed.
 
 Current pin labels:
 
@@ -425,6 +443,8 @@ Pin 10  TP4
 Pin 11  TP3
 Pin 12  TP2
 Pin 13  TP1 / test-boot related input
+Pin 14  GND / secondary ground
+Pin 15  DAC_OUT / mixed analog audio output
 ```
 
 Do **not** blindly pull TP1 or the other test pads to GND or 3.3 V. First determine their idle voltages and locate a reliable CW6638M/APB8202 programming procedure or capture the original factory-board behavior.
