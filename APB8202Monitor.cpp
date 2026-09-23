@@ -125,7 +125,7 @@ void printHelp()
   Serial0.println("  :listen            RX-only: continuously listen to the chip");
   Serial0.println("  :listen <rate>     set baud then continuously listen RX-only");
   Serial0.println("  :autolisten        RX-only rolling scan of ALL baud rates");
-  Serial0.println("  :analyze           measure raw GPIO18 edge timing for 10 seconds");
+  Serial0.println("  :edges             PASSIVE 5-second GPIO18 activity count");
   Serial0.println("  :stop              stop listen/autolisten mode");
   Serial0.println("  :help");
   Serial0.println();
@@ -344,16 +344,18 @@ void updateAutoListen()
 }
 
 
-void analyzeRawSignal()
+void passiveEdgeCount()
 {
+  // IMPORTANT: do not stop/restart Serial1 and do not change GPIO18 mode.
+  // The Bluetooth module remains electrically untouched. We only observe
+  // transitions already present on the RX pin.
   autoState = AUTO_IDLE;
   autoListenMode = false;
   listenMode = false;
-  if (rawBurstLength) printBurst();
+  rawBurstLength = 0;
 
-  Serial1.end();
-  delay(20);
-  pinMode(ProjectConfig::APB_UART_RX_GPIO, INPUT);
+  // Silently discard anything already decoded by the UART.
+  while (Serial1.available()) Serial1.read();
 
   edgeCount = 0;
   edgeLastCycles = 0;
@@ -362,91 +364,43 @@ void analyzeRawSignal()
                   edgeISR, CHANGE);
 
   Serial0.println();
-  Serial0.println("============= RAW GPIO18 SIGNAL ANALYSER =============");
-  Serial0.println("UART decoder OFF. Measuring Pin 5 -> GPIO18 directly.");
-  Serial0.println("Capture time: 10 seconds. Generate BT activity now.");
-  Serial0.println("Nothing is transmitted to the APB module.");
+  Serial0.println("========== PASSIVE GPIO18 ACTIVITY TEST ==========");
+  Serial0.println("BT Pin 5 -> GPIO18 is NOT reconfigured.");
+  Serial0.println("Serial1 stays running. Nothing is transmitted.");
+  Serial0.println("Counting signal transitions for 5 seconds...");
+  Serial0.println("Do NOT press Bluetooth controls during this sample.");
 
-  uint32_t start = millis();
-  while (millis() - start < 10000 && edgeCount < kEdgeSampleCount) {
-    delay(10);
+  const uint32_t startMs = millis();
+  while (millis() - startMs < 5000) {
+    // Keep the UART RX FIFO drained silently so garbage cannot flood the
+    // console after the measurement. Reading RX does not transmit anything.
+    while (Serial1.available()) Serial1.read();
+    delay(1);
   }
 
   edgeCaptureActive = false;
   detachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO));
 
-  size_t n = edgeCount;
+  // Discard any bytes accumulated at the end of the window.
+  while (Serial1.available()) Serial1.read();
+  rawBurstLength = 0;
+
+  const size_t intervals = edgeCount;
+  const uint32_t transitions = intervals ? (uint32_t)intervals + 1U : 0U;
+  const float edgesPerSecond = transitions / 5.0f;
+
   Serial0.println();
-  Serial0.println("================ RAW SIGNAL RESULT ================");
-  Serial0.printf("Edges/intervals captured: %u\n", (unsigned)n);
-
-  if (n < 8) {
-    Serial0.println("RESULT: NOT ENOUGH EDGE ACTIVITY TO ANALYSE.");
-    Serial0.println("Pin 5 was mostly static during this capture.");
-  } else {
-    const double cpuMHz = (double)ESP.getCpuFreqMHz();
-    uint32_t samples[kEdgeSampleCount];
-    noInterrupts();
-    for (size_t i=0; i<n; ++i) samples[i]=edgeIntervals[i];
-    interrupts();
-
-    uint32_t minCycles=0xFFFFFFFFUL, maxCycles=0;
-    for (size_t i=0;i<n;++i) {
-      if(samples[i]<minCycles) minCycles=samples[i];
-      if(samples[i]>maxCycles) maxCycles=samples[i];
-    }
-    Serial0.printf("CPU timing clock: %.0f MHz\n", cpuMHz);
-    Serial0.printf("Shortest pulse: %.3f us\n", minCycles/cpuMHz);
-    Serial0.printf("Longest pulse:  %.3f us\n", maxCycles/cpuMHz);
-
-    // Score each candidate baud by asking whether each observed pulse width
-    // is close to an integer multiple (1..12 bits) of that candidate bit time.
-    struct Score { uint32_t baud; uint32_t matched; double error; };
-    Score scores[kProbeBaudCount];
-    for(size_t bi=0;bi<kProbeBaudCount;++bi){
-      const uint32_t baud=kProbeBauds[bi];
-      const double bitCycles=(cpuMHz*1000000.0)/(double)baud;
-      uint32_t matched=0; double error=0.0;
-      for(size_t i=0;i<n;++i){
-        double mult=(double)samples[i]/bitCycles;
-        int nearest=(int)(mult+0.5);
-        if(nearest<1 || nearest>12) continue;
-        double e=mult-nearest; if(e<0)e=-e;
-        // +/-18% of one bit allows ISR latency/jitter but rejects poor fits.
-        if(e<=0.18){ ++matched; error+=e; }
-      }
-      scores[bi]={baud,matched,error};
-    }
-    // Sort best match count first, then lowest accumulated fractional error.
-    for(size_t i=0;i<kProbeBaudCount;i++) for(size_t j=i+1;j<kProbeBaudCount;j++){
-      bool better=scores[j].matched>scores[i].matched ||
-        (scores[j].matched==scores[i].matched && scores[j].error<scores[i].error);
-      if(better){Score t=scores[i];scores[i]=scores[j];scores[j]=t;}
-    }
-
-    Serial0.println();
-    Serial0.println("Top UART timing candidates:");
-    size_t show=kProbeBaudCount<5?kProbeBaudCount:5;
-    for(size_t i=0;i<show;++i){
-      double pct=100.0*(double)scores[i].matched/(double)n;
-      double bitUs=1000000.0/(double)scores[i].baud;
-      Serial0.printf("  #%u  %lu baud  bit=%.3f us  match=%.1f%% (%lu/%u)\n",
-        (unsigned)(i+1),(unsigned long)scores[i].baud,bitUs,pct,
-        (unsigned long)scores[i].matched,(unsigned)n);
-    }
-    double bestPct=100.0*(double)scores[0].matched/(double)n;
-    Serial0.println();
-    if(bestPct>=70.0) Serial0.println("SIGNAL TIMING: STRONGLY UART-LIKE for the best listed candidate.");
-    else if(bestPct>=45.0) Serial0.println("SIGNAL TIMING: POSSIBLY UART-LIKE; candidate is not conclusive.");
-    else Serial0.println("SIGNAL TIMING: NO STRONG UART BIT-TIMING MATCH.");
-    Serial0.printf("BEST TIMING CANDIDATE: %lu baud (%.1f%% pulse fit)\n",
-                   (unsigned long)scores[0].baud,bestPct);
-    Serial0.println("This is timing evidence only; valid UART framing/data is still unproven.");
-  }
-  Serial0.println("===================================================");
-
-  Serial0.println("[APB] UART remains OFF after analysis to prevent garbage flooding.");
-  Serial0.println("[APB] Use :baud <rate>, :listen <rate>, or :autolisten to re-enable it.");
+  Serial0.println("=============== ACTIVITY RESULT ===============");
+  Serial0.printf("Transitions: %lu in 5 seconds\n", (unsigned long)transitions);
+  Serial0.printf("Transitions/second: %.1f\n", edgesPerSecond);
+  Serial0.printf("GPIO18 level now: %s\n",
+                 digitalRead(ProjectConfig::APB_UART_RX_GPIO) ? "HIGH" : "LOW");
+  Serial0.println("===============================================");
+  Serial0.println("Run this THREE times:");
+  Serial0.println("  1) connected, music STOPPED");
+  Serial0.println("  2) connected, music PLAYING");
+  Serial0.println("  3) connected, music PAUSED");
+  Serial0.println("Send me all three ACTIVITY RESULT blocks.");
 }
 
 void handleLine(char *line)
@@ -463,8 +417,8 @@ void handleLine(char *line)
     else startListen(baud);
   } else if (!strcmp(line,":autolisten")) {
     startAutoListen();
-  } else if (!strcmp(line,":analyze")) {
-    analyzeRawSignal();
+  } else if (!strcmp(line,":edges")) {
+    passiveEdgeCount();
   } else if (!strcmp(line,":stop")) {
     listenMode=false;
     autoListenMode=false;
