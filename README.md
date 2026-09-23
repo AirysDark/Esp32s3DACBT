@@ -139,42 +139,59 @@ Protocol handling:   treat as unknown binary/HCI-style data during discovery
 
 The firmware does **not** currently assume an ASCII AT-command protocol, CRLF command framing, text connection notifications, or any Bluetooth-name command.
 
-## 15-pin module pinout
+## 15-pin module pinout — current meter-confirmed mapping
 
-The physical APB8202 V1.3 module used in this project has **15 edge pads**: 7 on the left-hand side and 8 on the right-hand side. This supersedes the earlier 14-pin table.
+The physical APB8202 V1.3 module in this project has **15 edge pads**.
 
-| Pin | Physical label | Electrical class | Purpose / project connection |
-|---:|---|---|---|
-| 1 | XTAL_P | Analog clock | On-board 26 MHz crystal reference pin |
-| 2 | XTAL_O | Analog clock | On-board 26 MHz crystal reference pin |
-| 3 | VIN (VCC) | Power input | Module main supply, 2.2-5.5 V; project uses 3.3 V |
-| 4 | GND | System ground | Primary digital ground; connect to ESP32 GND |
-| 5 | TXD | Digital output | UART data out; connect to ESP32 GPIO18 RX for sniffing |
-| 6 | RXD | Digital input | UART data in; connect to ESP32 GPIO17 TX only for active protocol tests |
-| 7 | CTS | Digital input / multifunction | Hardware flow-control / multifunction input; leave floating during current discovery work |
-| 8 | TP6 | Digital I/O | Factory production test node; leave unconnected |
-| 9 | TP5 | Digital I/O | Factory production test node; leave unconnected |
-| 10 | TP4 | Digital I/O | Factory production test node; leave unconnected |
-| 11 | TP3 | Digital I/O | Factory production test node; leave unconnected |
-| 12 | TP2 | Digital I/O | Factory production test node; leave unconnected |
-| 13 | TP1 | Digital input | Boot/test-related factory node; leave unconnected |
-| 14 | GND | Power ground | Secondary ground reference |
-| 15 | DAC_OUT | Analog output | Mixed 16-bit audio output |
+The earlier numbered 15-pin table is **not trusted anymore** because continuity testing on the real module disproved part of it.
 
-Physical grouping:
+### Confirmed on the actual module with a multimeter
+
+| Physical pin number | Current status | How confirmed |
+|---:|---|---|
+| 4 | **GND — CONFIRMED** | Continuity to the module ground/reference |
+| 8 | **GND — CONFIRMED** | Continuity to the same ground/reference and antenna ground plane |
+| 14 | **NOT GND — CONFIRMED** | No continuity to pin 4 / ground reference |
+
+All other numbered functions are currently **UNVERIFIED** until they are traced/measured on the actual 15-pad board.
 
 ```text
-LEFT-HAND EDGE (7 pads)       RIGHT-HAND EDGE (8 pads)
-------------------------------------------------------
-1   XTAL_P                    8   TP6
-2   XTAL_O                    9   TP5
-3   VIN / VCC                 10  TP4
-4   GND                       11  TP3
-5   TXD                       12  TP2
-6   RXD                       13  TP1
-7   CTS                       14  GND
-                              15  DAC_OUT
+CURRENT TRUSTED MAP
+
+Pin 1   UNKNOWN
+Pin 2   UNKNOWN
+Pin 3   UNKNOWN
+Pin 4   GND       ✅ confirmed
+Pin 5   UNKNOWN
+Pin 6   UNKNOWN
+Pin 7   UNKNOWN
+Pin 8   GND       ✅ confirmed
+Pin 9   UNKNOWN
+Pin 10  UNKNOWN
+Pin 11  UNKNOWN
+Pin 12  UNKNOWN
+Pin 13  UNKNOWN
+Pin 14  NOT GND   ✅ confirmed
+Pin 15  UNKNOWN
 ```
+
+### Important
+
+Do **not** use the older assumptions such as:
+
+```text
+pin 3 = VIN
+pin 5 = TXD
+pin 6 = RXD
+pin 7 = CTS
+pin 8 = TP6
+pin 14 = GND
+pin 15 = DAC_OUT
+```
+
+until those functions are independently verified on this exact board.
+
+For further probing, use **pin 4 as the primary known ground reference**. Pin 8 is also on the same confirmed ground net.
 
 Audio pads:
 
@@ -186,23 +203,25 @@ AGND  = analog audio ground
 
 ## Safe UART discovery wiring
 
-During protocol discovery only the APB8202 transmit line is connected:
+The ESP32-S3 side remains:
 
 ```text
-ESP32-S3                     APB8202
-------------------------------------------------
-3V3        ----------------> VIN  pin 3
-GND        ----------------> GND  pin 4/14
-GPIO18 RX  <---------------- TXD  pin 5
-
-NOT CONNECTED:
-GPIO17 TX  -X-              RXD  pin 6
-            -X-              CTS  pin 7
+GPIO18 = UART RX
+GPIO17 = reserved UART TX
 ```
 
-**Leave APB8202 RXD pin 6 and CTS pin 7 unconnected during discovery.**
+On the APB8202 side, **do not connect UART by physical pin number yet**. The old APB pin-number mapping has been invalidated by multimeter testing.
 
-GPIO17 is reserved in `ProjectConfig.h` for possible later transmit use after the real protocol has been identified, but it is not driven by the current firmware.
+Known safe ground reference:
+
+```text
+ESP32 GND ----------------> APB physical pin 4
+                         or APB physical pin 8
+```
+
+The APB TXD/RXD pads must be identified again on the real 15-pad module before GPIO18/GPIO17 are connected.
+
+GPIO17 remains reserved in `ProjectConfig.h` for possible later transmit use after the real APB UART pads and protocol are identified.
 
 ## Passive UART/HCI monitor
 
@@ -432,7 +451,7 @@ This code is intentionally **read-only**. A flash-writing routine should not be 
 
 ### Method 2: factory test pads (`TP1`-`TP6`)
 
-The 15-pin module exposes production/test pads on pins 8-13. Pin 14 is the secondary ground pad and pin 15 is `DAC_OUT`. The TP1-TP6 pads may provide a factory programming/configuration path, but the exact electrical protocol and boot entry sequence for this APB8202 firmware are not yet confirmed.
+The earlier TP1-TP6 numbered mapping is no longer trusted. Physical pin 8 is now meter-confirmed GND, and physical pin 14 is meter-confirmed NOT GND. Factory test pads may still exist on the module, but their physical pin numbers must be re-identified before use.
 
 Current pin labels:
 
@@ -443,7 +462,7 @@ Pin 10  TP4
 Pin 11  TP3
 Pin 12  TP2
 Pin 13  TP1 / test-boot related input
-Pin 14  GND / secondary ground
+Pin 14  NOT GND — meter-confirmed
 Pin 15  DAC_OUT / mixed analog audio output
 ```
 
@@ -581,7 +600,7 @@ Target wiring:
 ESP32-S3                     APB8202
 ------------------------------------------------
 3V3        ----------------> VIN  pin 3
-GND        ----------------> GND  pin 4/14
+GND        ----------------> GND  pin 4 or pin 8
 GPIO18 RX  <---------------- TXD  pin 5
 GPIO17 TX  ----------------> RXD  pin 6
 
@@ -790,7 +809,7 @@ GPIO5 = right ADC input = ADC1 channel 4
 
 ```text
 APB8202 VIN  -> ESP32 3.3V
-APB8202 GND  -> ESP32 GND
+APB8202 confirmed GND (physical pin 4 or 8) -> ESP32 GND
 APB8202 AGND -> ESP32 GND
 ```
 
