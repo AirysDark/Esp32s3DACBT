@@ -57,6 +57,11 @@ static uint32_t autoTxStart = 0;
 static bool autoAnyReply = false;
 static uint32_t autoReplyBaud = 0;
 static bool listenMode = false;
+static bool autoListenMode = false;
+static size_t autoListenBaudIndex = 0;
+static uint32_t autoListenDeadlineMs = 0;
+static uint32_t autoListenRxStart = 0;
+static const uint32_t kAutoListenDwellMs = 2000;
 
 void printBurst();
 
@@ -99,7 +104,8 @@ void printHelp()
   Serial0.println("  :autoscan          automatically test every baud and print result");
   Serial0.println("  :listen            RX-only: continuously listen to the chip");
   Serial0.println("  :listen <rate>     set baud then continuously listen RX-only");
-  Serial0.println("  :stop              leave listen mode");
+  Serial0.println("  :autolisten        RX-only rolling scan of ALL baud rates");
+  Serial0.println("  :stop              stop listen/autolisten mode");
   Serial0.println("  :help");
   Serial0.println();
   Serial0.println("Expected H4 event packet type is 04 if this UART exposes HCI.");
@@ -182,6 +188,7 @@ void sendHex(const char *p)
 void startAutoScan()
 {
   listenMode = false;
+  autoListenMode = false;
   if (autoState != AUTO_IDLE && autoState != AUTO_DONE) {
     Serial0.println("[AUTO] scan already running");
     return;
@@ -277,6 +284,44 @@ void startListen(uint32_t baud)
   Serial0.println("================================================");
 }
 
+void startAutoListen()
+{
+  autoState = AUTO_IDLE;
+  listenMode = false;
+  autoListenMode = true;
+  autoListenBaudIndex = 0;
+  autoListenRxStart = totalBytes;
+  configureUart(kProbeBauds[0]);
+  autoListenDeadlineMs = millis() + kAutoListenDwellMs;
+
+  Serial0.println();
+  Serial0.println("============ APB ROLLING AUTO-LISTEN ============");
+  Serial0.println("RX ONLY. NOTHING is transmitted to the BT module.");
+  Serial0.println("Automatically cycling every configured baud rate.");
+  Serial0.println("2 seconds per baud; repeats forever until :stop.");
+  Serial0.println("Any received bytes are printed immediately as [APB RX].");
+  Serial0.println("==================================================");
+}
+
+void updateAutoListen()
+{
+  if (!autoListenMode) return;
+  if ((int32_t)(millis() - autoListenDeadlineMs) < 0) return;
+
+  captureUart();
+  uint32_t received = totalBytes - autoListenRxStart;
+  if (received) {
+    Serial0.printf("[AUTO-LISTEN] *** %lu RX byte(s) detected at %lu baud ***\n",
+                   (unsigned long)received,
+                   (unsigned long)kProbeBauds[autoListenBaudIndex]);
+  }
+
+  autoListenBaudIndex = (autoListenBaudIndex + 1) % kProbeBaudCount;
+  configureUart(kProbeBauds[autoListenBaudIndex]);
+  autoListenRxStart = totalBytes;
+  autoListenDeadlineMs = millis() + kAutoListenDwellMs;
+}
+
 void handleLine(char *line)
 {
   if (!line || !*line) return;
@@ -289,9 +334,12 @@ void handleLine(char *line)
     uint32_t baud=strtoul(line+8,nullptr,10);
     if (!baud) Serial0.println("[APB] invalid listen baud");
     else startListen(baud);
+  } else if (!strcmp(line,":autolisten")) {
+    startAutoListen();
   } else if (!strcmp(line,":stop")) {
     listenMode=false;
-    Serial0.println("[APB] listen mode stopped");
+    autoListenMode=false;
+    Serial0.println("[APB] listen/autolisten stopped");
   } else if (!strcmp(line,":stats")) {
     Serial0.printf("[APB] baud=%lu RX=%lu bursts=%lu TX=%lu\n",
       (unsigned long)currentBaud,(unsigned long)totalBytes,
@@ -357,6 +405,7 @@ void update()
 {
   captureUart();
   updateAutoScan();
+  updateAutoListen();
   readConsole();
 }
 
