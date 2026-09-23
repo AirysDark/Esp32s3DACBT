@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <stdlib.h>
 #include <string.h>
+#include "driver/gpio.h"
+#include "esp_timer.h"
 #include "ProjectConfig.h"
 
 namespace {
@@ -63,6 +65,24 @@ static uint32_t autoListenDeadlineMs = 0;
 static uint32_t autoListenRxStart = 0;
 static const uint32_t kAutoListenDwellMs = 2000;
 
+// Raw GPIO timing analyser. ISR stores edge-to-edge intervals in microseconds.
+// This bypasses UART decoding completely.
+static const size_t kEdgeSampleCount = 4096;
+static volatile uint32_t edgeIntervals[kEdgeSampleCount];
+static volatile size_t edgeCount = 0;
+static volatile uint32_t edgeLastUs = 0;
+static volatile bool edgeCaptureActive = false;
+
+void IRAM_ATTR edgeISR()
+{
+  if (!edgeCaptureActive) return;
+  uint32_t now = (uint32_t)esp_timer_get_time();
+  uint32_t previous = edgeLastUs;
+  edgeLastUs = now;
+  if (previous && edgeCount < kEdgeSampleCount)
+    edgeIntervals[edgeCount++] = now - previous;
+}
+
 void printBurst();
 
 void consolePrintln(const char *s) { Serial0.println(s); }
@@ -105,6 +125,7 @@ void printHelp()
   Serial0.println("  :listen            RX-only: continuously listen to the chip");
   Serial0.println("  :listen <rate>     set baud then continuously listen RX-only");
   Serial0.println("  :autolisten        RX-only rolling scan of ALL baud rates");
+  Serial0.println("  :analyze           measure raw GPIO18 edge timing for 10 seconds");
   Serial0.println("  :stop              stop listen/autolisten mode");
   Serial0.println("  :help");
   Serial0.println();
@@ -322,6 +343,100 @@ void updateAutoListen()
   autoListenDeadlineMs = millis() + kAutoListenDwellMs;
 }
 
+
+void analyzeRawSignal()
+{
+  autoState = AUTO_IDLE;
+  autoListenMode = false;
+  listenMode = false;
+  if (rawBurstLength) printBurst();
+
+  Serial1.end();
+  delay(20);
+  pinMode(ProjectConfig::APB_UART_RX_GPIO, INPUT);
+
+  edgeCount = 0;
+  edgeLastUs = 0;
+  edgeCaptureActive = true;
+  attachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO),
+                  edgeISR, CHANGE);
+
+  Serial0.println();
+  Serial0.println("============= RAW GPIO18 SIGNAL ANALYSER =============");
+  Serial0.println("UART decoder OFF. Measuring Pin 5 -> GPIO18 directly.");
+  Serial0.println("Capture time: 10 seconds. Generate BT activity now.");
+  Serial0.println("Nothing is transmitted to the APB module.");
+
+  uint32_t start = millis();
+  while (millis() - start < 10000 && edgeCount < kEdgeSampleCount) {
+    delay(10);
+  }
+
+  edgeCaptureActive = false;
+  detachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO));
+
+  size_t n = edgeCount;
+  Serial0.println();
+  Serial0.println("================ RAW SIGNAL RESULT ================");
+  Serial0.printf("Edges/intervals captured: %u\n", (unsigned)n);
+
+  if (n < 4) {
+    Serial0.println("RESULT: NOT ENOUGH EDGE ACTIVITY TO ANALYSE.");
+    Serial0.println("Pin 5 was mostly static during this capture.");
+  } else {
+    // Histogram intervals from 1..200 us. The smallest strongly recurring
+    // interval is the best first estimate of one serial bit time.
+    uint16_t histogram[201];
+    memset(histogram, 0, sizeof(histogram));
+    uint32_t minUs = 0xFFFFFFFFUL;
+    uint32_t maxUs = 0;
+
+    noInterrupts();
+    for (size_t i=0; i<n; ++i) {
+      uint32_t v = edgeIntervals[i];
+      if (v < minUs) minUs = v;
+      if (v > maxUs) maxUs = v;
+      if (v >= 1 && v <= 200 && histogram[v] != 0xFFFF)
+        ++histogram[v];
+    }
+    interrupts();
+
+    uint32_t bestUs = 0;
+    uint16_t bestHits = 0;
+    for (uint32_t us=1; us<=200; ++us) {
+      if (histogram[us] > bestHits) {
+        bestHits = histogram[us];
+        bestUs = us;
+      }
+    }
+
+    Serial0.printf("Shortest interval: %lu us\n", (unsigned long)minUs);
+    Serial0.printf("Longest interval:  %lu us\n", (unsigned long)maxUs);
+    Serial0.printf("Most common 1-200us interval: %lu us (%u hits)\n",
+                   (unsigned long)bestUs, (unsigned)bestHits);
+
+    if (bestUs) {
+      uint32_t estimated = 1000000UL / bestUs;
+      Serial0.printf("Raw timing estimate: ~%lu baud if that interval is one bit\n",
+                     (unsigned long)estimated);
+
+      uint32_t nearest = kProbeBauds[0];
+      uint32_t nearestError = (nearest > estimated) ? nearest-estimated : estimated-nearest;
+      for (size_t i=1; i<kProbeBaudCount; ++i) {
+        uint32_t b=kProbeBauds[i];
+        uint32_t e=(b > estimated) ? b-estimated : estimated-b;
+        if (e < nearestError) { nearest=b; nearestError=e; }
+      }
+      Serial0.printf("Nearest configured UART rate: %lu baud\n",
+                     (unsigned long)nearest);
+      Serial0.println("NOTE: This is a timing estimate, not proof the signal is UART.");
+    }
+  }
+  Serial0.println("===================================================");
+
+  configureUart(currentBaud);
+}
+
 void handleLine(char *line)
 {
   if (!line || !*line) return;
@@ -336,6 +451,8 @@ void handleLine(char *line)
     else startListen(baud);
   } else if (!strcmp(line,":autolisten")) {
     startAutoListen();
+  } else if (!strcmp(line,":analyze")) {
+    analyzeRawSignal();
   } else if (!strcmp(line,":stop")) {
     listenMode=false;
     autoListenMode=false;
