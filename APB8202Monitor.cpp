@@ -25,6 +25,15 @@ static const uint32_t kProbeBauds[] = {
 static const size_t kProbeBaudCount =
     sizeof(kProbeBauds) / sizeof(kProbeBauds[0]);
 
+enum AutoScanState { AUTO_IDLE, AUTO_SETTLE, AUTO_WAIT_REPLY, AUTO_DONE };
+static AutoScanState autoState = AUTO_IDLE;
+static size_t autoBaudIndex = 0;
+static uint32_t autoDeadlineMs = 0;
+static uint32_t autoRxStart = 0;
+static uint32_t autoTxStart = 0;
+static bool autoAnyReply = false;
+static uint32_t autoReplyBaud = 0;
+
 void printBurst();
 
 void consolePrintln(const char *s) { Serial0.println(s); }
@@ -63,6 +72,7 @@ void printHelp()
   Serial0.println("  :hex 01 03 0C 00   transmit exact bytes");
   Serial0.println("  :text abc          transmit exact text, no CR/LF");
   Serial0.println("  :hcireset          send standard H4 HCI Reset: 01 03 0C 00");
+  Serial0.println("  :autoscan          automatically test every baud and print result");
   Serial0.println("  :help");
   Serial0.println();
   Serial0.println("Expected H4 event packet type is 04 if this UART exposes HCI.");
@@ -142,6 +152,89 @@ void sendHex(const char *p)
   sendBytes(data,n);
 }
 
+void startAutoScan()
+{
+  if (autoState != AUTO_IDLE && autoState != AUTO_DONE) {
+    Serial0.println("[AUTO] scan already running");
+    return;
+  }
+
+  autoBaudIndex = 0;
+  autoAnyReply = false;
+  autoReplyBaud = 0;
+  autoRxStart = totalBytes;
+  autoTxStart = totalTxBytes;
+  Serial0.println();
+  Serial0.println("============================================");
+  Serial0.println(" APB AUTOMATIC HCI UART BAUD SCAN");
+  Serial0.println(" Tests: 9600 38400 57600 115200 230400 460800 921600");
+  Serial0.println(" Sends H4 HCI Reset 01 03 0C 00 at each rate");
+  Serial0.println("============================================");
+  configureUart(kProbeBauds[autoBaudIndex]);
+  autoDeadlineMs = millis() + 250;
+  autoState = AUTO_SETTLE;
+}
+
+void updateAutoScan()
+{
+  if (autoState == AUTO_IDLE || autoState == AUTO_DONE) return;
+
+  captureUart();
+
+  if ((int32_t)(millis() - autoDeadlineMs) < 0) return;
+
+  if (autoState == AUTO_SETTLE) {
+    const uint8_t reset[] = {0x01,0x03,0x0C,0x00};
+    const uint32_t before = totalBytes;
+    Serial0.printf("[AUTO] Testing %lu baud...\n",
+                   (unsigned long)kProbeBauds[autoBaudIndex]);
+    sendBytes(reset, sizeof(reset));
+    autoRxStart = before;
+    autoDeadlineMs = millis() + 1500;
+    autoState = AUTO_WAIT_REPLY;
+    return;
+  }
+
+  if (autoState == AUTO_WAIT_REPLY) {
+    captureUart();
+    const uint32_t received = totalBytes - autoRxStart;
+    if (received > 0) {
+      autoAnyReply = true;
+      autoReplyBaud = kProbeBauds[autoBaudIndex];
+      Serial0.printf("[AUTO] >>> RX DETECTED at %lu baud: %lu byte(s) <<<\n",
+                     (unsigned long)autoReplyBaud,
+                     (unsigned long)received);
+    } else {
+      Serial0.printf("[AUTO] no RX at %lu baud\n",
+                     (unsigned long)kProbeBauds[autoBaudIndex]);
+    }
+
+    ++autoBaudIndex;
+    if (autoBaudIndex >= kProbeBaudCount) {
+      Serial0.println();
+      Serial0.println("=============== AUTO RESULT ===============");
+      if (autoAnyReply) {
+        Serial0.printf("RESULT: RX DATA DETECTED. Last responding baud: %lu\n",
+                       (unsigned long)autoReplyBaud);
+        Serial0.println("Inspect the [APB RX] HEX output above.");
+      } else {
+        Serial0.println("RESULT: NO RX DATA AT ANY TESTED BAUD.");
+        Serial0.println("TX worked, but no UART reply was detected.");
+      }
+      Serial0.printf("TOTAL SCAN TX=%lu bytes  CURRENT TOTAL RX=%lu bytes\n",
+                     (unsigned long)(totalTxBytes-autoTxStart),
+                     (unsigned long)totalBytes);
+      Serial0.println("===========================================");
+      autoState = AUTO_DONE;
+      return;
+    }
+
+    configureUart(kProbeBauds[autoBaudIndex]);
+    autoDeadlineMs = millis() + 250;
+    autoState = AUTO_SETTLE;
+  }
+}
+
 void handleLine(char *line)
 {
   if (!line || !*line) return;
@@ -169,6 +262,8 @@ void handleLine(char *line)
   } else if (!strcmp(line,":hcireset")) {
     const uint8_t reset[]={0x01,0x03,0x0C,0x00};
     sendBytes(reset,sizeof(reset));
+  } else if (!strcmp(line,":autoscan")) {
+    startAutoScan();
   } else {
     Serial0.println("[APB] Unknown command. Use :help");
   }
@@ -207,7 +302,12 @@ bool begin()
   return true;
 }
 
-void update() { captureUart(); readConsole(); }
+void update()
+{
+  captureUart();
+  updateAutoScan();
+  readConsole();
+}
 
 bool setBaud(uint32_t baud)
 {
