@@ -68,17 +68,17 @@ static const uint32_t kAutoListenDwellMs = 2000;
 // Raw GPIO timing analyser. ISR stores edge-to-edge intervals in microseconds.
 // This bypasses UART decoding completely.
 static const size_t kEdgeSampleCount = 4096;
-static volatile uint32_t edgeIntervals[kEdgeSampleCount];
+static volatile uint32_t edgeIntervals[kEdgeSampleCount]; // CPU cycles between edges
 static volatile size_t edgeCount = 0;
-static volatile uint32_t edgeLastUs = 0;
+static volatile uint32_t edgeLastCycles = 0;
 static volatile bool edgeCaptureActive = false;
 
 void IRAM_ATTR edgeISR()
 {
   if (!edgeCaptureActive) return;
-  uint32_t now = (uint32_t)esp_timer_get_time();
-  uint32_t previous = edgeLastUs;
-  edgeLastUs = now;
+  uint32_t now = ESP.getCycleCount();
+  uint32_t previous = edgeLastCycles;
+  edgeLastCycles = now;
   if (previous && edgeCount < kEdgeSampleCount)
     edgeIntervals[edgeCount++] = now - previous;
 }
@@ -356,7 +356,7 @@ void analyzeRawSignal()
   pinMode(ProjectConfig::APB_UART_RX_GPIO, INPUT);
 
   edgeCount = 0;
-  edgeLastUs = 0;
+  edgeLastCycles = 0;
   edgeCaptureActive = true;
   attachInterrupt(digitalPinToInterrupt(ProjectConfig::APB_UART_RX_GPIO),
                   edgeISR, CHANGE);
@@ -380,61 +380,73 @@ void analyzeRawSignal()
   Serial0.println("================ RAW SIGNAL RESULT ================");
   Serial0.printf("Edges/intervals captured: %u\n", (unsigned)n);
 
-  if (n < 4) {
+  if (n < 8) {
     Serial0.println("RESULT: NOT ENOUGH EDGE ACTIVITY TO ANALYSE.");
     Serial0.println("Pin 5 was mostly static during this capture.");
   } else {
-    // Histogram intervals from 1..200 us. The smallest strongly recurring
-    // interval is the best first estimate of one serial bit time.
-    uint16_t histogram[201];
-    memset(histogram, 0, sizeof(histogram));
-    uint32_t minUs = 0xFFFFFFFFUL;
-    uint32_t maxUs = 0;
-
+    const double cpuMHz = (double)ESP.getCpuFreqMHz();
+    uint32_t samples[kEdgeSampleCount];
     noInterrupts();
-    for (size_t i=0; i<n; ++i) {
-      uint32_t v = edgeIntervals[i];
-      if (v < minUs) minUs = v;
-      if (v > maxUs) maxUs = v;
-      if (v >= 1 && v <= 200 && histogram[v] != 0xFFFF)
-        ++histogram[v];
-    }
+    for (size_t i=0; i<n; ++i) samples[i]=edgeIntervals[i];
     interrupts();
 
-    uint32_t bestUs = 0;
-    uint16_t bestHits = 0;
-    for (uint32_t us=1; us<=200; ++us) {
-      if (histogram[us] > bestHits) {
-        bestHits = histogram[us];
-        bestUs = us;
+    uint32_t minCycles=0xFFFFFFFFUL, maxCycles=0;
+    for (size_t i=0;i<n;++i) {
+      if(samples[i]<minCycles) minCycles=samples[i];
+      if(samples[i]>maxCycles) maxCycles=samples[i];
+    }
+    Serial0.printf("CPU timing clock: %.0f MHz\n", cpuMHz);
+    Serial0.printf("Shortest pulse: %.3f us\n", minCycles/cpuMHz);
+    Serial0.printf("Longest pulse:  %.3f us\n", maxCycles/cpuMHz);
+
+    // Score each candidate baud by asking whether each observed pulse width
+    // is close to an integer multiple (1..12 bits) of that candidate bit time.
+    struct Score { uint32_t baud; uint32_t matched; double error; };
+    Score scores[kProbeBaudCount];
+    for(size_t bi=0;bi<kProbeBaudCount;++bi){
+      const uint32_t baud=kProbeBauds[bi];
+      const double bitCycles=(cpuMHz*1000000.0)/(double)baud;
+      uint32_t matched=0; double error=0.0;
+      for(size_t i=0;i<n;++i){
+        double mult=(double)samples[i]/bitCycles;
+        int nearest=(int)(mult+0.5);
+        if(nearest<1 || nearest>12) continue;
+        double e=mult-nearest; if(e<0)e=-e;
+        // +/-18% of one bit allows ISR latency/jitter but rejects poor fits.
+        if(e<=0.18){ ++matched; error+=e; }
       }
+      scores[bi]={baud,matched,error};
+    }
+    // Sort best match count first, then lowest accumulated fractional error.
+    for(size_t i=0;i<kProbeBaudCount;i++) for(size_t j=i+1;j<kProbeBaudCount;j++){
+      bool better=scores[j].matched>scores[i].matched ||
+        (scores[j].matched==scores[i].matched && scores[j].error<scores[i].error);
+      if(better){Score t=scores[i];scores[i]=scores[j];scores[j]=t;}
     }
 
-    Serial0.printf("Shortest interval: %lu us\n", (unsigned long)minUs);
-    Serial0.printf("Longest interval:  %lu us\n", (unsigned long)maxUs);
-    Serial0.printf("Most common 1-200us interval: %lu us (%u hits)\n",
-                   (unsigned long)bestUs, (unsigned)bestHits);
-
-    if (bestUs) {
-      uint32_t estimated = 1000000UL / bestUs;
-      Serial0.printf("Raw timing estimate: ~%lu baud if that interval is one bit\n",
-                     (unsigned long)estimated);
-
-      uint32_t nearest = kProbeBauds[0];
-      uint32_t nearestError = (nearest > estimated) ? nearest-estimated : estimated-nearest;
-      for (size_t i=1; i<kProbeBaudCount; ++i) {
-        uint32_t b=kProbeBauds[i];
-        uint32_t e=(b > estimated) ? b-estimated : estimated-b;
-        if (e < nearestError) { nearest=b; nearestError=e; }
-      }
-      Serial0.printf("Nearest configured UART rate: %lu baud\n",
-                     (unsigned long)nearest);
-      Serial0.println("NOTE: This is a timing estimate, not proof the signal is UART.");
+    Serial0.println();
+    Serial0.println("Top UART timing candidates:");
+    size_t show=kProbeBaudCount<5?kProbeBaudCount:5;
+    for(size_t i=0;i<show;++i){
+      double pct=100.0*(double)scores[i].matched/(double)n;
+      double bitUs=1000000.0/(double)scores[i].baud;
+      Serial0.printf("  #%u  %lu baud  bit=%.3f us  match=%.1f%% (%lu/%u)\n",
+        (unsigned)(i+1),(unsigned long)scores[i].baud,bitUs,pct,
+        (unsigned long)scores[i].matched,(unsigned)n);
     }
+    double bestPct=100.0*(double)scores[0].matched/(double)n;
+    Serial0.println();
+    if(bestPct>=70.0) Serial0.println("SIGNAL TIMING: STRONGLY UART-LIKE for the best listed candidate.");
+    else if(bestPct>=45.0) Serial0.println("SIGNAL TIMING: POSSIBLY UART-LIKE; candidate is not conclusive.");
+    else Serial0.println("SIGNAL TIMING: NO STRONG UART BIT-TIMING MATCH.");
+    Serial0.printf("BEST TIMING CANDIDATE: %lu baud (%.1f%% pulse fit)\n",
+                   (unsigned long)scores[0].baud,bestPct);
+    Serial0.println("This is timing evidence only; valid UART framing/data is still unproven.");
   }
   Serial0.println("===================================================");
 
-  configureUart(currentBaud);
+  Serial0.println("[APB] UART remains OFF after analysis to prevent garbage flooding.");
+  Serial0.println("[APB] Use :baud <rate>, :listen <rate>, or :autolisten to re-enable it.");
 }
 
 void handleLine(char *line)
