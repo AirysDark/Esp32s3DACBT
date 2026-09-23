@@ -14,7 +14,6 @@
 
 #include <Arduino.h>
 #include "APB8202Monitor.h"
-#include "BLEDebugConsole.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error "Esp32s3DACBT requires ESP32-S3"
@@ -22,22 +21,23 @@
 
 void setup()
 {
-  DebugConsole.begin("Esp32s3DACBT Serial");
+  Serial0.begin(115200);
+  delay(1000);
   delay(1000);
 
-  DebugConsole.println();
-  DebugConsole.println("============================================");
-  DebugConsole.println(" APB8202 / CW6638M UART DISCOVERY MODE");
-  DebugConsole.println("============================================");
-  DebugConsole.println(" Debug console: BLE only");
-  DebugConsole.println(" BT TX pin 5 -> GPIO18 RX");
-  DebugConsole.println(" BT RX pin 6 -> GPIO17 TX");
-  DebugConsole.println(" ADC audio: DISABLED");
-  DebugConsole.println(" USB host:  DISABLED");
-  DebugConsole.println();
+  Serial0.println();
+  Serial0.println("============================================");
+  Serial0.println(" APB8202 / CW6638M UART DISCOVERY MODE");
+  Serial0.println("============================================");
+  Serial0.println(" PC console: Serial0 @ 115200");
+  Serial0.println(" BT TX pin 5 -> GPIO18 RX");
+  Serial0.println(" BT RX pin 6 -> GPIO17 TX");
+  Serial0.println(" ADC audio: DISABLED");
+  Serial0.println(" USB host:  DISABLED");
+  Serial0.println();
 
   if (!APB8202Monitor::begin()) {
-    DebugConsole.println("[FATAL] APB8202 UART monitor setup failed");
+    Serial0.println("[FATAL] APB8202 UART monitor setup failed");
     while (true) yield();
   }
 }
@@ -45,6 +45,6 @@ void setup()
 void loop()
 {
   APB8202Monitor::update();
-  DebugConsole.update();
+  Serial0.update();
   yield();
 }
