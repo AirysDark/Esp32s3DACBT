@@ -56,6 +56,7 @@ static uint32_t autoRxStart = 0;
 static uint32_t autoTxStart = 0;
 static bool autoAnyReply = false;
 static uint32_t autoReplyBaud = 0;
+static bool listenMode = false;
 
 void printBurst();
 
@@ -96,6 +97,9 @@ void printHelp()
   Serial0.println("  :text abc          transmit exact text, no CR/LF");
   Serial0.println("  :hcireset          send standard H4 HCI Reset: 01 03 0C 00");
   Serial0.println("  :autoscan          automatically test every baud and print result");
+  Serial0.println("  :listen            RX-only: continuously listen to the chip");
+  Serial0.println("  :listen <rate>     set baud then continuously listen RX-only");
+  Serial0.println("  :stop              leave listen mode");
   Serial0.println("  :help");
   Serial0.println();
   Serial0.println("Expected H4 event packet type is 04 if this UART exposes HCI.");
@@ -177,6 +181,7 @@ void sendHex(const char *p)
 
 void startAutoScan()
 {
+  listenMode = false;
   if (autoState != AUTO_IDLE && autoState != AUTO_DONE) {
     Serial0.println("[AUTO] scan already running");
     return;
@@ -259,12 +264,34 @@ void updateAutoScan()
   }
 }
 
+void startListen(uint32_t baud)
+{
+  if (baud && baud != currentBaud) configureUart(baud);
+  listenMode = true;
+  Serial0.println();
+  Serial0.println("=============== APB LISTEN MODE ===============");
+  Serial0.printf("RX ONLY on GPIO18 at %lu baud. NOTHING will be transmitted.\n",
+                 (unsigned long)currentBaud);
+  Serial0.println("Listening continuously; incoming bytes appear as [APB RX].");
+  Serial0.println("Use :baud <rate> to change speed or :stop to leave listen mode.");
+  Serial0.println("================================================");
+}
+
 void handleLine(char *line)
 {
   if (!line || !*line) return;
 
   if (!strcmp(line,":help")) {
     printHelp();
+  } else if (!strcmp(line,":listen")) {
+    startListen(0);
+  } else if (!strncmp(line,":listen ",8)) {
+    uint32_t baud=strtoul(line+8,nullptr,10);
+    if (!baud) Serial0.println("[APB] invalid listen baud");
+    else startListen(baud);
+  } else if (!strcmp(line,":stop")) {
+    listenMode=false;
+    Serial0.println("[APB] listen mode stopped");
   } else if (!strcmp(line,":stats")) {
     Serial0.printf("[APB] baud=%lu RX=%lu bursts=%lu TX=%lu\n",
       (unsigned long)currentBaud,(unsigned long)totalBytes,
