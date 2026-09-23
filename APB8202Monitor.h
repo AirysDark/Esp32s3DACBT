@@ -4,13 +4,12 @@
 
 namespace APB8202Monitor {
 
-// Passive RX-only monitor for the APB8202 / CW6638M UART.
-// No bytes are transmitted to the module.
+// Two-way raw UART discovery console for APB8202 / CW6638M.
+// Nothing is transmitted automatically at boot. Use :autoscan for the
+// automatic H4 HCI Reset baud sweep.
 bool begin();
 void update();
 
-// Change only the ESP32 receive baud. Useful while characterizing the unknown
-// APB8202 UART/HCI firmware.
 bool setBaud(uint32_t baud);
 bool nextBaud();
 
