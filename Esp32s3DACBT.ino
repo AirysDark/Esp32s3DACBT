@@ -45,6 +45,5 @@ void setup()
 void loop()
 {
   APB8202Monitor::update();
-  Serial0.update();
   yield();
 }
