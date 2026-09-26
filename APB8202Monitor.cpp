@@ -1,7 +1,6 @@
 #include "APB8202Monitor.h"
 
 #include <Arduino.h>
-#include "ProjectConfig.h"
 
 namespace {
 
@@ -13,7 +12,7 @@ static volatile uint32_t edgeTimeUs[kMaxEdges];
 static volatile uint8_t edgeLevel[kMaxEdges];
 static volatile size_t edgeCount = 0;
 
-static size_t printedEdges = 0;\nstatic uint32_t intervalHistogram[201] = {};
+static size_t printedEdges = 0;
 static bool captureFullPrinted = false;
 static uint32_t lastEdgeUs = 0;
 
@@ -69,8 +68,6 @@ namespace APB8202Monitor {
 
 bool begin()
 {
-  // Critical isolation rule: neither APB-connected ESP32 pin is driven.
-  // Do not call Serial1.begin(), pinMode OUTPUT, or enable pull resistors.
   pinMode(kCapturePin, INPUT);
   pinMode(kNoDrivePin, INPUT);
 
@@ -83,8 +80,10 @@ bool begin()
 
   Serial0.println("[BOOT] Passive capture ARMED.");
   Serial0.printf("[BOOT] GPIO%d initial level: %s\n",
-                 kCapturePin, digitalRead(kCapturePin) ? "HIGH" : "LOW");
-  Serial0.println("[BOOT] Turn APB power ON now.");\n  Serial0.println("[BOOT] GPIO17/18 remain passive; Serial1 is never started.");
+                 kCapturePin,
+                 digitalRead(kCapturePin) ? "HIGH" : "LOW");
+  Serial0.println("[BOOT] GPIO17/18 are passive inputs; Serial1 is NOT started.");
+  Serial0.println("[BOOT] Turn APB power ON now.");
   return true;
 }
 
