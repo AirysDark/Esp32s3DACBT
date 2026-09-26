@@ -2,145 +2,267 @@
 #include <Arduino.h>
 
 namespace {
-static const int RX_PIN=18, SAFE_PIN=17;
-static const size_t MAX_EDGES=8192;
-static volatile uint32_t edgeUs[MAX_EDGES];
-static volatile size_t edgeCount=0;
-static int initialLevel=LOW;
-static bool started=false, finished=false;
-static uint32_t firstEdgeMs=0, lastSeenMs=0;
-static size_t lastCount=0;
 
-void IRAM_ATTR edgeISR(){
-  size_t i=edgeCount;
-  if(i<MAX_EDGES){ edgeUs[i]=(uint32_t)micros(); edgeCount=i+1; }
+static const int PIN5_GPIO = 18;
+static const int PIN6_GPIO = 17;
+static const size_t MAX_EDGES = 8192;
+
+struct Capture {
+  volatile uint32_t t[MAX_EDGES];
+  volatile size_t count;
+  int initial;
+};
+
+static Capture p5 = {{0}, 0, LOW};
+static Capture p6 = {{0}, 0, LOW};
+static bool started = false;
+static bool finished = false;
+static uint32_t firstActivityMs = 0;
+static uint32_t lastActivityMs = 0;
+static size_t last5 = 0;
+static size_t last6 = 0;
+
+void IRAM_ATTR isr5() {
+  size_t i = p5.count;
+  if (i < MAX_EDGES) {
+    p5.t[i] = (uint32_t)micros();
+    p5.count = i + 1;
+  }
 }
 
-int levelAt(uint32_t t,size_t n){
-  int level=initialLevel;
-  for(size_t i=0;i<n && edgeUs[i]<=t;i++) level=!level;
+void IRAM_ATTR isr6() {
+  size_t i = p6.count;
+  if (i < MAX_EDGES) {
+    p6.t[i] = (uint32_t)micros();
+    p6.count = i + 1;
+  }
+}
+
+int levelAt(const Capture &c, uint32_t when, size_t n) {
+  int level = c.initial;
+  for (size_t i = 0; i < n && c.t[i] <= when; ++i) level = !level;
   return level;
 }
 
-struct Result { uint32_t baud; bool inverted; size_t good,bad,count; uint8_t data[256]; };
+struct Decode {
+  uint32_t baud;
+  bool inverted;
+  size_t good;
+  size_t bad;
+  size_t count;
+  uint8_t data[128];
+};
 
-Result decode(uint32_t baud,bool inv,size_t n){
-  Result r={baud,inv,0,0,0,{0}};
-  const float bit=1000000.0f/(float)baud;
-  size_t i=0;
-  while(i<n && r.count<256){
-    int before=(i==0)?initialLevel:((initialLevel+(int)i)&1);
-    int after=!before;
-    if(inv){before=!before;after=!after;}
-    if(before==HIGH && after==LOW){
-      uint32_t start=edgeUs[i];
-      uint8_t b=0;
-      for(int k=0;k<8;k++){
-        int v=levelAt(start+(uint32_t)((1.5f+k)*bit),n);
-        if(inv)v=!v;
-        if(v)b|=(1U<<k);
+Decode decode8N1(const Capture &c, uint32_t baud, bool inverted, size_t n) {
+  Decode r = {baud, inverted, 0, 0, 0, {0}};
+  const float bitUs = 1000000.0f / (float)baud;
+  size_t i = 0;
+
+  while (i < n && r.count < sizeof(r.data)) {
+    int before = (i == 0) ? c.initial : ((c.initial + (int)i) & 1);
+    int after = !before;
+    if (inverted) { before = !before; after = !after; }
+
+    if (before == HIGH && after == LOW) {
+      const uint32_t start = c.t[i];
+      uint8_t value = 0;
+
+      for (int b = 0; b < 8; ++b) {
+        int v = levelAt(c, start + (uint32_t)((1.5f + b) * bitUs), n);
+        if (inverted) v = !v;
+        if (v) value |= (1U << b);
       }
-      int stop=levelAt(start+(uint32_t)(9.5f*bit),n);
-      if(inv)stop=!stop;
-      if(stop==HIGH){
-        r.good++;
-        r.data[r.count++]=b;
-        uint32_t end=start+(uint32_t)(10.0f*bit);
-        while(i<n && edgeUs[i]<end)i++;
+
+      int stop = levelAt(c, start + (uint32_t)(9.5f * bitUs), n);
+      if (inverted) stop = !stop;
+
+      if (stop == HIGH) {
+        ++r.good;
+        r.data[r.count++] = value;
+        const uint32_t end = start + (uint32_t)(10.0f * bitUs);
+        while (i < n && c.t[i] < end) ++i;
         continue;
-      } else r.bad++;
+      }
+      ++r.bad;
     }
-    i++;
+    ++i;
   }
   return r;
 }
 
-void analyze(size_t n){
-  detachInterrupt(digitalPinToInterrupt(RX_PIN));
-  Serial0.println();
-  Serial0.println("========== APB AUTOMATIC PASSIVE ANALYSIS ==========");
-  Serial0.printf("Edges captured: %u\n",(unsigned)n);
-  if(n<3){Serial0.println("Not enough activity to analyse.");finished=true;return;}
-
-  uint32_t hist[201]={0},minDt=0xFFFFFFFFUL,maxDt=0;
-  for(size_t i=1;i<n;i++){
-    uint32_t d=edgeUs[i]-edgeUs[i-1];
-    if(d<minDt)minDt=d; if(d>maxDt)maxDt=d;
-    if(d>=1 && d<=200)hist[d]++;
+bool clockLike(const Decode &r) {
+  if (r.count < 8) return false;
+  size_t alternating = 0;
+  for (size_t i = 0; i < r.count; ++i) {
+    const uint8_t b = r.data[i];
+    if (b == 0x55 || b == 0xAA || b == 0xF5 || b == 0xFD || b == 0x95)
+      ++alternating;
   }
-  uint32_t mode=0,hits=0;
-  for(uint32_t u=1;u<=200;u++)if(hist[u]>hits){hits=hist[u];mode=u;}
-  Serial0.printf("Dominant edge interval: %lu us (%lu hits)\n",(unsigned long)mode,(unsigned long)hits);
-  if(mode)Serial0.printf("Raw timing estimate: ~%lu Hz if this is one bit/cycle\n",(unsigned long)(1000000UL/mode));
-  Serial0.printf("Interval range: %lu .. %lu us\n",(unsigned long)minDt,(unsigned long)maxDt);
+  return alternating * 100U / r.count >= 60U;
+}
 
-  const uint32_t rates[]={57600,76800,92160,93750,96000,100000,115200,128000,230400,460800,921600};
-  Result best={0,false,0,0,0,{0}};
+void reportPin(const char *name, int gpio, const Capture &c) {
+  const size_t n = c.count;
   Serial0.println();
-  Serial0.println("UART software-decode candidates (no UART peripheral used):");
-  for(size_t q=0;q<sizeof(rates)/sizeof(rates[0]);q++){
-    for(int inv=0;inv<2;inv++){
-      Result r=decode(rates[q],inv!=0,n);
-      size_t total=r.good+r.bad;
-      unsigned score=total?(unsigned)(100UL*r.good/total):0;
-      Serial0.printf("  %6lu 8N1 %s : valid=%u invalid=%u score=%u%% bytes=%u\n",
-        (unsigned long)r.baud,r.inverted?"INVERTED":"NORMAL",
-        (unsigned)r.good,(unsigned)r.bad,score,(unsigned)r.count);
-      size_t bt=best.good+best.bad;
-      unsigned bs=bt?(unsigned)(100UL*best.good/bt):0;
-      if(r.count && (score>bs || (score==bs && r.good>best.good)))best=r;
+  Serial0.printf("----- %s / GPIO%d -----\n", name, gpio);
+  Serial0.printf("Edges: %u  initial=%s\n", (unsigned)n, c.initial ? "HIGH" : "LOW");
+
+  if (n < 3) {
+    Serial0.println("Classification: STATIC / insufficient activity");
+    return;
+  }
+
+  uint32_t hist[201] = {0};
+  uint32_t minDt = 0xFFFFFFFFUL, maxDt = 0;
+  for (size_t i = 1; i < n; ++i) {
+    const uint32_t d = c.t[i] - c.t[i - 1];
+    if (d < minDt) minDt = d;
+    if (d > maxDt) maxDt = d;
+    if (d >= 1 && d <= 200) ++hist[d];
+  }
+
+  uint32_t mode = 0, modeHits = 0;
+  for (uint32_t u = 1; u <= 200; ++u) {
+    if (hist[u] > modeHits) { modeHits = hist[u]; mode = u; }
+  }
+
+  Serial0.printf("Dominant interval: %lu us (%lu hits)\n",
+                 (unsigned long)mode, (unsigned long)modeHits);
+  Serial0.printf("Interval range: %lu .. %lu us\n",
+                 (unsigned long)minDt, (unsigned long)maxDt);
+
+  const uint32_t rates[] = {
+    9600, 19200, 38400, 57600, 76800, 92160, 93750,
+    96000, 100000, 115200, 128000, 230400, 460800, 921600
+  };
+
+  Decode best = {0, false, 0, 0, 0, {0}};
+  unsigned bestScore = 0;
+
+  for (size_t q = 0; q < sizeof(rates) / sizeof(rates[0]); ++q) {
+    for (int inv = 0; inv < 2; ++inv) {
+      Decode r = decode8N1(c, rates[q], inv != 0, n);
+      const size_t total = r.good + r.bad;
+      const unsigned score = total ? (unsigned)(100UL * r.good / total) : 0;
+      if (r.count && (score > bestScore ||
+          (score == bestScore && r.good > best.good))) {
+        best = r;
+        bestScore = score;
+      }
     }
   }
 
-  Serial0.println();
-  if(!best.count){
-    Serial0.println("RESULT: No convincing 8N1 UART decode found.");
-  }else{
-    size_t total=best.good+best.bad;
-    unsigned score=total?(unsigned)(100UL*best.good/total):0;
-    Serial0.printf("BEST: %lu baud, 8N1, %s, framing score %u%%\n",
-      (unsigned long)best.baud,best.inverted?"INVERTED":"NORMAL",score);
-    Serial0.printf("Decoded bytes (%u max shown):\n",(unsigned)best.count);
-    for(size_t i=0;i<best.count;i++){
-      if((i%16)==0)Serial0.println();
-      if(best.data[i]<16)Serial0.print('0');
-      Serial0.print(best.data[i],HEX); Serial0.print(' ');
-    }
-    Serial0.println();
-    bool hci=false;
-    for(size_t i=0;i<best.count;i++)if(best.data[i]==0x04){hci=true;break;}
-    Serial0.printf("H4/HCI event marker 0x04 present: %s\n",hci?"YES (candidate only)":"NO");
-    if(score<80)Serial0.println("WARNING: framing score is weak; do not treat bytes as proven UART.");
+  if (!best.count) {
+    Serial0.println("UART: no usable 8N1 candidate");
+    Serial0.println("Classification: NON-UART / UNKNOWN");
+    return;
+  }
+
+  Serial0.printf("Best UART candidate: %lu 8N1 %s, framing=%u%%, bytes=%u\n",
+                 (unsigned long)best.baud,
+                 best.inverted ? "INVERTED" : "NORMAL",
+                 bestScore, (unsigned)best.count);
+
+  const bool looksClock = clockLike(best);
+  Serial0.printf("Alternating-pattern test: %s\n",
+                 looksClock ? "CLOCK-LIKE / FALSE-UART LIKELY" : "not dominant");
+
+  Serial0.print("Bytes:");
+  const size_t shown = best.count < 64 ? best.count : 64;
+  for (size_t i = 0; i < shown; ++i) {
+    if ((i % 16) == 0) Serial0.println();
+    if (best.data[i] < 16) Serial0.print('0');
+    Serial0.print(best.data[i], HEX);
+    Serial0.print(' ');
   }
   Serial0.println();
-  Serial0.println("GPIO18 stayed input-only. GPIO17 stayed input-only. Serial1 was never started.");
-  Serial0.println("=====================================================");
-  finished=true;
+
+  bool hci = false;
+  for (size_t i = 0; i < best.count; ++i)
+    if (best.data[i] == 0x04) { hci = true; break; }
+
+  Serial0.printf("H4/HCI 0x04 marker: %s\n", hci ? "present (candidate only)" : "not seen");
+
+  if (bestScore >= 90 && !looksClock)
+    Serial0.println("Classification: STRONG UART CANDIDATE");
+  else if (looksClock)
+    Serial0.println("Classification: CLOCK/PERIODIC SIGNAL; do not trust UART bytes");
+  else
+    Serial0.println("Classification: POSSIBLE UART; needs confirmation");
 }
+
+void analyse() {
+  detachInterrupt(digitalPinToInterrupt(PIN5_GPIO));
+  detachInterrupt(digitalPinToInterrupt(PIN6_GPIO));
+
+  Serial0.println();
+  Serial0.println("========== APB TWO-PIN PASSIVE SIGNAL SCAN ==========");
+  reportPin("APB physical pin 5", PIN5_GPIO, p5);
+  reportPin("APB physical pin 6", PIN6_GPIO, p6);
+  Serial0.println();
+  Serial0.println("Both ESP32 pins remained INPUT-only.");
+  Serial0.println("Serial1 was never started and nothing was transmitted.");
+  Serial0.println("======================================================");
+  finished = true;
 }
+
+} // namespace
 
 namespace APB8202Monitor {
-bool begin(){
-  pinMode(RX_PIN,INPUT);
-  pinMode(SAFE_PIN,INPUT);
-  initialLevel=digitalRead(RX_PIN);
-  edgeCount=0;lastCount=0;started=false;finished=false;
-  attachInterrupt(digitalPinToInterrupt(RX_PIN),edgeISR,CHANGE);
-  Serial0.println("[BOOT] Passive automatic analyser ARMED.");
-  Serial0.printf("[BOOT] GPIO18 initial level: %s\n",initialLevel?"HIGH":"LOW");
-  Serial0.println("[BOOT] GPIO17/18 input-only; Serial1 NOT started.");
-  Serial0.println("[BOOT] Turn APB power ON now.");
-  Serial0.println("[BOOT] Capturing first activity plus later boot bursts automatically.");
+
+bool begin() {
+  pinMode(PIN5_GPIO, INPUT);
+  pinMode(PIN6_GPIO, INPUT);
+
+  p5.count = 0;
+  p6.count = 0;
+  p5.initial = digitalRead(PIN5_GPIO);
+  p6.initial = digitalRead(PIN6_GPIO);
+
+  started = false;
+  finished = false;
+  last5 = last6 = 0;
+
+  attachInterrupt(digitalPinToInterrupt(PIN5_GPIO), isr5, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN6_GPIO), isr6, CHANGE);
+
+  Serial0.println("[SCAN] Two-pin passive analyser ARMED.");
+  Serial0.printf("[SCAN] APB pin 5 -> GPIO18 initial=%s\n", p5.initial ? "HIGH" : "LOW");
+  Serial0.printf("[SCAN] APB pin 6 -> GPIO17 initial=%s\n", p6.initial ? "HIGH" : "LOW");
+  Serial0.println("[SCAN] GPIO17/18 INPUT-only. Serial1 NOT started.");
+  Serial0.println("[SCAN] Turn APB power ON now.");
+  Serial0.println("[SCAN] One power-up will analyse both candidate signal pins.");
   return true;
 }
-void update(){
-  if(finished)return;
-  size_t n=edgeCount;
-  if(n!=lastCount){
-    lastCount=n;lastSeenMs=millis();
-    if(!started){started=true;firstEdgeMs=lastSeenMs;Serial0.println("[BOOT] Activity detected; capturing...");}
+
+void update() {
+  if (finished) return;
+
+  const size_t n5 = p5.count;
+  const size_t n6 = p6.count;
+
+  if (n5 != last5 || n6 != last6) {
+    last5 = n5;
+    last6 = n6;
+    lastActivityMs = millis();
+    if (!started) {
+      started = true;
+      firstActivityMs = lastActivityMs;
+      Serial0.println("[SCAN] Activity detected; capturing both pins...");
+    }
   }
-  if(n>=MAX_EDGES){analyze(n);return;}
-  if(started && ((millis()-firstEdgeMs)>=6500 || ((millis()-lastSeenMs)>=1500 && (millis()-firstEdgeMs)>=5500))) analyze(n);
+
+  if (n5 >= MAX_EDGES || n6 >= MAX_EDGES) {
+    analyse();
+    return;
+  }
+
+  if (started) {
+    const uint32_t now = millis();
+    if ((now - firstActivityMs) >= 6500 ||
+        ((now - firstActivityMs) >= 5500 && (now - lastActivityMs) >= 1000))
+      analyse();
+  }
 }
-}
+
+} // namespace APB8202Monitor
