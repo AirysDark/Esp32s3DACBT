@@ -13,7 +13,7 @@ static volatile uint32_t edgeTimeUs[kMaxEdges];
 static volatile uint8_t edgeLevel[kMaxEdges];
 static volatile size_t edgeCount = 0;
 
-static size_t printedEdges = 0;
+static size_t printedEdges = 0;\nstatic uint32_t intervalHistogram[201] = {};
 static bool captureFullPrinted = false;
 static uint32_t lastEdgeUs = 0;
 
@@ -84,7 +84,7 @@ bool begin()
   Serial0.println("[BOOT] Passive capture ARMED.");
   Serial0.printf("[BOOT] GPIO%d initial level: %s\n",
                  kCapturePin, digitalRead(kCapturePin) ? "HIGH" : "LOW");
-  Serial0.println("[BOOT] Turn APB power ON now.");
+  Serial0.println("[BOOT] Turn APB power ON now.");\n  Serial0.println("[BOOT] GPIO17/18 remain passive; Serial1 is never started.");
   return true;
 }
 
