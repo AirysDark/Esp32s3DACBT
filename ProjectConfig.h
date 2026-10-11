@@ -10,12 +10,16 @@ static const uint8_t AUDIO_RIGHT_GPIO = 5;
 static const uint8_t USB_D_MINUS_GPIO = 19;
 static const uint8_t USB_D_PLUS_GPIO  = 20;
 
-// APB8202 / CW6638M isolation test:
-// Temporarily move the ESP32-S3 UART away from the APB wiring so GPIO17/18
-// do not communicate with or load module pins 5/6 during the disconnect test.
-// Leave the physical APB wiring on GPIO17/18 unchanged for this test.
-static const int8_t APB_UART_RX_GPIO = 15;
-static const int8_t APB_UART_TX_GPIO = 16;
+// APB passive observation pins.
+static const int8_t APB_PIN5_GPIO = 18;
+static const int8_t APB_PIN6_GPIO = 17;
+
+// ESP32-controlled APB power switch.
+// GPIO8 -> 100 ohm -> N-MOSFET gate.
+// 10k from MOSFET gate to GND keeps the APB OFF during reset/boot.
+static const uint8_t APB_POWER_GPIO = 8;
+static const uint32_t APB_POWER_OFF_SETTLE_MS = 500;
+static const uint32_t APB_CAPTURE_MS = 6500;
 
 static const uint32_t APB_MONITOR_DEFAULT_BAUD = 9600;
 static const uint32_t APB_MONITOR_BURST_GAP_MS = 12;
