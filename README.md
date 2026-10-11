@@ -1255,3 +1255,65 @@ PSRAM=opi
 A green workflow means the checked-in sketch compiled using both the required core version and the actual ESP32-S3-WROOM-1-N16R8 flash/PSRAM configuration.
 
 fix
+
+
+---
+
+# ESP32-controlled APB8202 power switch
+
+The current diagnostic build uses **GPIO8** to switch APB8202 power automatically. This lets the ESP32 arm the passive GPIO17/GPIO18 capture first and then boot the APB at a known instant.
+
+This circuit assumes a **3.3 V logic-level N-channel MOSFET**. Verify the MOSFET's actual datasheet pin order before soldering; Gate/Drain/Source positions are package-specific.
+
+```text
+                    +5V SUPPLY
+                        |
+                        *---------------- APB Pin 3 VIN
+                                         APB8202
+                                      APB Pin 4 GND
+                                            |
+                                            *
+                                            |
+                                          DRAIN
+                                      +-------------+
+ESP32 GPIO8 *---- 100 ohm ----*------| G   N-MOSFET|
+                              |      |             |
+                             10k     | S           |
+                              |      +-------------+
+ESP32 GND   *-----------------*------------*
+              |
+5V GND       *-------------------------------- common ground
+```
+
+Connections:
+
+```text
+ESP32 GPIO8  -> 100 ohm resistor -> MOSFET GATE
+MOSFET GATE  -> 10k resistor -> GND
+MOSFET SOURCE -> GND
+MOSFET DRAIN  -> APB Pin 4 GND
+APB Pin 3 VIN -> +5V
+ESP32 GND     -> 5V supply GND
+
+Passive signal capture:
+APB physical Pin 5 -> GPIO18
+APB physical Pin 6 -> GPIO17
+```
+
+The **100 ohm** resistor limits the instantaneous GPIO current used to charge/discharge the MOSFET gate. The **10k** gate-to-ground resistor keeps the MOSFET OFF while GPIO8 is floating during ESP32 reset.
+
+Firmware sequence:
+
+```text
+GPIO8 LOW  -> APB OFF
+wait 500 ms
+arm GPIO17/GPIO18 passive capture
+GPIO8 HIGH -> APB ON
+capture boot traffic for ~6.5 seconds
+analyse both candidate signal pins
+```
+
+### Low-side-switch warning
+
+This is a low-side power switch: while the APB is OFF, its GPIO signal connections can potentially provide a small back-power path through protection structures. GPIO17 and GPIO18 therefore remain INPUT-only and Serial1 is never started during this diagnostic build. A dedicated high-side load switch or P-channel MOSFET is preferable for the final hardware if complete power isolation is required.
+
