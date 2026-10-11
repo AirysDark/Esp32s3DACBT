@@ -1,15 +1,12 @@
 /*
-  Esp32s3DACBT - passive APB8202 boot signal capture
+  Esp32s3DACBT - APB8202 automatic passive boot capture
   Core target: Arduino-ESP32 2.0.17
 
-  Serial Monitor:
-    Serial0 / UART0 at 115200 baud
+  GPIO18 observes APB physical pin 5.
+  GPIO17 observes APB physical pin 6.
+  GPIO8 controls the APB power N-MOSFET.
 
-  APB observation:
-    APB pin 5 -> ESP32-S3 GPIO18
-    APB pin 6 / ESP32 GPIO17 is NOT driven
-
-  IMPORTANT: this build never starts Serial1 and never transmits to the APB.
+  Serial1 is never started and GPIO17/18 are never driven.
 */
 
 #include <Arduino.h>
@@ -26,15 +23,14 @@ void setup()
 
   Serial0.println();
   Serial0.println("============================================");
-  Serial0.println(" APB8202 PASSIVE BOOT CAPTURE");
+  Serial0.println(" APB8202 AUTO POWER + PASSIVE SIGNAL SCAN");
   Serial0.println(" Arduino-ESP32 Core 2.0.17");
   Serial0.println("============================================");
-  Serial0.println(" GPIO18: passive input from APB pin 5");
-  Serial0.println(" GPIO17: input/high-Z; NEVER transmitted");
+  Serial0.println(" GPIO18 <- APB physical pin 5 (INPUT only)");
+  Serial0.println(" GPIO17 <- APB physical pin 6 (INPUT only)");
+  Serial0.println(" GPIO8  -> 100R -> N-MOSFET gate");
+  Serial0.println(" MOSFET gate -> 10k -> GND");
   Serial0.println(" Serial1: NOT started");
-  Serial0.println();
-  Serial0.println("Leave ESP32 powered. Switch APB power OFF,");
-  Serial0.println("then ON. Boot transitions print below.");
   Serial0.println();
 
   APB8202Monitor::begin();
