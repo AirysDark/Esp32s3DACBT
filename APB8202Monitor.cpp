@@ -1,5 +1,5 @@
 #include "APB8202Monitor.h"
-#include <Arduino.h>
+#include <Arduino.h>\n#include "ProjectConfig.h"
 
 namespace {
 
@@ -259,7 +259,7 @@ void update() {
 
   if (started) {
     const uint32_t now = millis();
-    if ((now - firstActivityMs) >= 6500 ||
+    if ((now - firstActivityMs) >= ProjectConfig::APB_CAPTURE_MS ||
         ((now - firstActivityMs) >= 5500 && (now - lastActivityMs) >= 1000))
       analyse();
   }
