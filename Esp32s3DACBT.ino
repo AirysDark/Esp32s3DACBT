@@ -28,8 +28,8 @@ void setup()
   Serial0.println("============================================");
   Serial0.println(" GPIO18 <- APB physical pin 5 (INPUT only)");
   Serial0.println(" GPIO17 <- APB physical pin 6 (INPUT only)");
-  Serial0.println(" GPIO8  -> 100R -> N-MOSFET gate");
-  Serial0.println(" MOSFET gate -> 10k -> GND");
+  Serial0.println(" GPIO8  -> IRLZ44N Pin 1 (Gate)");
+  Serial0.println(" IRLZ44N Pin 1 -> 10k -> common GND");
   Serial0.println(" Serial1: NOT started");
   Serial0.println();
 
