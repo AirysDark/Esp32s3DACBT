@@ -1,10 +1,12 @@
 #include "APB8202Monitor.h"
-#include <Arduino.h>\n#include "ProjectConfig.h"
+#include <Arduino.h>
+#include "ProjectConfig.h"
 
 namespace {
 
-static const int PIN5_GPIO = 18;
-static const int PIN6_GPIO = 17;
+static const int PIN5_GPIO = ProjectConfig::APB_PIN5_GPIO;
+static const int PIN6_GPIO = ProjectConfig::APB_PIN6_GPIO;
+static const int POWER_GPIO = ProjectConfig::APB_POWER_GPIO;
 static const size_t MAX_EDGES = 8192;
 
 struct Capture {
@@ -211,6 +213,11 @@ void analyse() {
 namespace APB8202Monitor {
 
 bool begin() {
+  // IRLZ44N low-side switch: LOW = APB off, HIGH = APB on.
+  pinMode(POWER_GPIO, OUTPUT);
+  digitalWrite(POWER_GPIO, LOW);
+  delay(ProjectConfig::APB_POWER_OFF_SETTLE_MS);
+
   pinMode(PIN5_GPIO, INPUT);
   pinMode(PIN6_GPIO, INPUT);
 
@@ -230,8 +237,10 @@ bool begin() {
   Serial0.printf("[SCAN] APB pin 5 -> GPIO18 initial=%s\n", p5.initial ? "HIGH" : "LOW");
   Serial0.printf("[SCAN] APB pin 6 -> GPIO17 initial=%s\n", p6.initial ? "HIGH" : "LOW");
   Serial0.println("[SCAN] GPIO17/18 INPUT-only. Serial1 NOT started.");
-  Serial0.println("[SCAN] Turn APB power ON now.");
-  Serial0.println("[SCAN] One power-up will analyse both candidate signal pins.");
+  Serial0.printf("[SCAN] GPIO%d -> IRLZ44N Pin 1 gate.\n", POWER_GPIO);
+  Serial0.println("[SCAN] Capture armed; powering APB ON automatically.");
+  digitalWrite(POWER_GPIO, HIGH);
+  Serial0.println("[SCAN] APB power ON. Capturing both candidate signal pins.");
   return true;
 }
 
