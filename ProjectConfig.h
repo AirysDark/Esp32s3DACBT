@@ -15,8 +15,8 @@ static const int8_t APB_PIN5_GPIO = 18;
 static const int8_t APB_PIN6_GPIO = 17;
 
 // ESP32-controlled APB power switch.
-// GPIO8 -> 100 ohm -> N-MOSFET gate.
-// 10k from MOSFET gate to GND keeps the APB OFF during reset/boot.
+// GPIO8 -> IRLZ44N pin 1 (Gate) directly.
+// 10k from IRLZ44N pin 1 (Gate) to common GND keeps the APB OFF during reset/boot.
 static const uint8_t APB_POWER_GPIO = 8;
 static const uint32_t APB_POWER_OFF_SETTLE_MS = 500;
 static const uint32_t APB_CAPTURE_MS = 6500;
